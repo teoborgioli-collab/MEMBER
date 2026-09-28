@@ -28,6 +28,7 @@ export const submissionSchema = z
   .object({
     requestId: z.uuid(),
     kind: z.enum(['new', 'existing']),
+    locale: z.enum(['de','en']).default('de'),
     firstName: name,
     lastName: name,
     birthDate: z.string().refine(validDate),
@@ -39,6 +40,7 @@ export const submissionSchema = z
       .min(1)
       .max(20)
       .refine((v) => !/[\p{Cc}\p{Cf}]/u.test(v)),
+    membershipStartMonth: z.string().regex(/^\d{4}-\d{2}$/).optional(),
     /** Answers to the additional questions, checked in lib/settings.ts#checkAnswers. */
     answers: z
       .record(z.string().max(40), z.union([z.string().max(2000), z.boolean()]))
@@ -51,7 +53,8 @@ export const submissionSchema = z
     /** Fingerprint of the acknowledgement texts shown to the visitor (see lib/settings.ts). */
     consent: z.string().regex(/^[0-9a-f]{16}$/),
   })
-  .refine((v) => v.kind === 'existing' || v.statutesAccepted === 'on');
+  .refine((v) => v.kind === 'existing' || v.statutesAccepted === 'on')
+  .refine((v) => v.kind !== 'existing' || Boolean(v.membershipStartMonth), { message: 'Eintrittsmonat erforderlich.' });
 
 export const actionSchema = z.object({
   action: z.enum(['approve', 'review', 'reject', 'sent', 'delete', 'mails', 'send_approval']),
@@ -72,6 +75,9 @@ export type Submission = {
   /** Empty for submissions made before these fields were introduced. */
   phone: string | null;
   room: string | null;
+  /** YYYY-MM for existing members, otherwise null. */
+  membership_start_month: string | null;
+  locale: 'de' | 'en';
   /** Answers to additional questions, with the question text at the time of submission. */
   answers: { id: string; question: string; answer: string }[];
   status: Status;

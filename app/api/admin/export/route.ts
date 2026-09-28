@@ -39,8 +39,8 @@ export async function GET(request: Request) {
     if (status !== 'all' && !(STATUSES as readonly string[]).includes(status))
       throw new HttpError(400, 'Unbekannter Filter.');
     const rows = await db()`
-      SELECT id, kind, status, first_name, last_name, birth_date::text AS birth_date, email,
-             phone, room, answers, created_at, decided_at, sent_at, club_notified_at,
+      SELECT id, kind, status, locale, first_name, last_name, birth_date::text AS birth_date, email,
+             phone, room, membership_start_month, answers, created_at, decided_at, sent_at, club_notified_at,
              confirmation_sent_at
       FROM submissions WHERE (${status} = 'all' OR status = ${status})
       ORDER BY created_at DESC, id DESC`;
@@ -59,6 +59,8 @@ export async function GET(request: Request) {
       'E-Mail',
       'Telefon',
       'Zimmernummer',
+      'Eintrittsmonat/-jahr',
+      'Sprache',
       ...questions,
       'Eingegangen',
       'Bearbeitet',
@@ -79,6 +81,8 @@ export async function GET(request: Request) {
         r.email,
         r.phone ?? '',
         r.room ?? '',
+        r.membership_start_month ?? '',
+        r.locale === 'en' ? 'Englisch' : 'Deutsch',
         ...questions.map(answer),
         stamp(r.created_at),
         stamp(r.decided_at),

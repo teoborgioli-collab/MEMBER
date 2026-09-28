@@ -19,12 +19,10 @@ export const maxDuration = 30;
 export async function POST(request: Request) {
   try {
     const raw = await body(request);
+    const locale = raw && typeof raw === 'object' && !Array.isArray(raw) && (raw as Record<string,unknown>).locale === 'en' ? 'en' : 'de';
     const parsed = submissionSchema.safeParse(raw);
     if (!parsed.success)
-      throw new HttpError(
-        400,
-        'Bitte prüfe deine Angaben und bestätige alle erforderlichen Hinweise.',
-      );
+      throw new HttpError(400, locale === 'en' ? 'Please check your information and confirm all required notices.' : 'Bitte prüfe deine Angaben und bestätige alle erforderlichen Hinweise.');
     const d = parsed.data;
     const portal = await readSettings();
     if (portal.dbError) throw new HttpError(503, UNAVAILABLE_NOTICE);
@@ -34,26 +32,26 @@ export async function POST(request: Request) {
       if (stored) return json({ reference: d.requestId }, 201);
     }
     if (!acceptingSubmissions(portal))
-      throw new HttpError(503, 'Das Portal ist derzeit nicht für Einreichungen freigeschaltet.');
+      throw new HttpError(503, d.locale === 'en' ? 'The portal is currently not accepting submissions.' : 'Das Portal ist derzeit nicht für Einreichungen freigeschaltet.');
     const s = portal.settings;
     // The visitor confirmed texts or documents that have changed since the page was loaded.
     if (d.consent !== consentVersion(s, d.kind))
       throw new HttpError(
         409,
-        'Die Hinweise wurden gerade aktualisiert. Bitte lies sie erneut und bestätige sie.',
+        d.locale === 'en' ? 'The notices were just updated. Please read and confirm them again.' : 'Die Hinweise wurden gerade aktualisiert. Bitte lies sie erneut und bestätige sie.',
         { code: 'stale', config: formConfig(portal) },
       );
-    const { answers, error: answerError } = checkAnswers(s.questions, d.kind, d.answers);
+    const { answers, error: answerError } = checkAnswers(s.questions, d.kind, d.answers, d.locale);
     if (answerError) throw new HttpError(400, answerError);
     await limit(request, 'submission', 10);
     const sql = db();
     const inserted = await sql`
       INSERT INTO submissions
-        (id, kind, first_name, last_name, birth_date, email, phone, room, answers,
+        (id, kind, locale, first_name, last_name, birth_date, email, phone, room, membership_start_month, answers,
          document_version, statutes_url, privacy_url, acknowledgements)
       VALUES
-        (${d.requestId}, ${d.kind}, ${d.firstName}, ${d.lastName}, ${d.birthDate}, ${d.email},
-         ${d.phone}, ${d.room}, ${sql.json(answers)},
+        (${d.requestId}, ${d.kind}, ${d.locale}, ${d.firstName}, ${d.lastName}, ${d.birthDate}, ${d.email},
+         ${d.phone}, ${d.room}, ${d.kind === 'existing' ? d.membershipStartMonth ?? null : null}, ${sql.json(answers)},
          ${s.documentVersion}, ${d.kind === 'new' ? s.statutesUrl : ''}, ${s.privacyUrl},
          ${sql.json(acknowledgements(s, d.kind))})
       ON CONFLICT (id) DO NOTHING

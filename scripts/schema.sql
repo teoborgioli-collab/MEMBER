@@ -26,6 +26,8 @@ ALTER TABLE submissions ADD COLUMN IF NOT EXISTS club_notified_at timestamptz;
 ALTER TABLE submissions ADD COLUMN IF NOT EXISTS confirmation_sent_at timestamptz;
 ALTER TABLE submissions ADD COLUMN IF NOT EXISTS mail_error text;
 ALTER TABLE submissions ADD COLUMN IF NOT EXISTS approval_mail_error text;
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS locale text NOT NULL DEFAULT 'de' CHECK (locale IN ('de','en'));
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS membership_start_month text CHECK (membership_start_month IS NULL OR membership_start_month ~ '^\d{4}-\d{2}$');
 CREATE INDEX IF NOT EXISTS submissions_status_created ON submissions(status,created_at DESC);
 CREATE TABLE IF NOT EXISTS rate_limits (key text NOT NULL,bucket bigint NOT NULL,count integer NOT NULL,PRIMARY KEY(key,bucket));
 -- Texts, links and open/closed state edited in /admin/formular (a single row).

@@ -1,5 +1,6 @@
 'use client';
 import { useRef, useState } from 'react';
+import { localizeFormTexts, localizeQuestion, UI, type Locale } from '../lib/i18n';
 import {
   QUESTION_LIMITS,
   UNAVAILABLE_NOTICE,
@@ -23,14 +24,17 @@ const SAMPLE_REFERENCE = '3f6c2a1e-8b4d-4c9a-9e2f-7a1b5c8d0e42';
 export default function MembershipForm({
   config: initialConfig,
   preview,
+  locale = 'de',
 }: {
   config: FormConfig;
   preview?: PreviewControls;
+  locale?: Locale;
 }) {
   const [liveConfig, setLiveConfig] = useState(initialConfig);
   // In the preview the editor's draft (props) is the source of truth.
   const config = preview ? initialConfig : liveConfig;
-  const t = config.texts;
+  const t = localizeFormTexts(config.texts, locale);
+  const ui = UI[locale];
   const [ownKind, setOwnKind] = useState<Kind>('new');
   const [ownStep, setOwnStep] = useState<1 | 2>(1);
   const [busy, setBusy] = useState(false);
@@ -69,13 +73,14 @@ export default function MembershipForm({
             ...data,
             answers,
             kind,
+            locale,
             requestId: requestId.current,
             consent: config.consent[kind],
           }),
         });
       } catch {
         throw new Error(
-          'Keine Verbindung. Bitte prüfe deine Internetverbindung und versuche es erneut.',
+          ui.offline,
         );
       }
       const result = await res.json().catch(() => ({}));
@@ -90,7 +95,7 @@ export default function MembershipForm({
       }
       if (!res.ok)
         throw new Error(
-          result.error || 'Die Übermittlung ist fehlgeschlagen. Bitte versuche es später erneut.',
+          result.error || ui.submitError,
         );
       setOwnReceipt(result.reference);
       form.current?.reset();
@@ -98,7 +103,7 @@ export default function MembershipForm({
       setError(
         err instanceof Error && err.message
           ? err.message
-          : 'Die Übermittlung ist fehlgeschlagen. Bitte versuche es später erneut.',
+          : ui.submitError,
       );
     } finally {
       setBusy(false);
@@ -142,7 +147,7 @@ export default function MembershipForm({
     <section className="form-card">
       <div className="card-top">
         <span className="eyebrow">{t.formEyebrow}</span>
-        <span className="pill">Schritt {step} von 2</span>
+        <span className="pill">{ui.step(step)}</span>
       </div>
       <h2>{step === 1 ? t.form1Heading : t.form2Heading}</h2>
       {(step === 1 ? t.form1Text : t.form2Text) && (
@@ -234,18 +239,24 @@ export default function MembershipForm({
                 required
                 maxLength={30}
                 pattern="\+?[0-9\(][0-9 \(\)\/.\-]{4,}"
-                title="Bitte eine Telefonnummer mit mindestens 6 Ziffern angeben."
+                title={ui.phoneTitle}
               />
             </label>
             <label>
               {t.labelRoom}
               <input name="room" required maxLength={20} autoComplete="off" />
             </label>
+            {kind === 'existing' && (
+              <label>
+                {t.labelMembershipStart}
+                <input name="membershipStartMonth" type="month" min="1900-01" max={new Date().toISOString().slice(0, 7)} required />
+              </label>
+            )}
           </div>
           {questionsFor(config.questions, kind).length > 0 && (
             <div className="questions">
               {questionsFor(config.questions, kind).map((q) => (
-                <QuestionField key={q.id} question={q} />
+                <QuestionField key={q.id} question={q} locale={locale} />
               ))}
             </div>
           )}
@@ -274,7 +285,7 @@ export default function MembershipForm({
                   <strong>{t.statutesTitle}</strong>
                   {t.statutesHint && <small>{t.statutesHint}</small>}
                 </div>
-                <span>Öffnen</span>
+                <span>{ui.open}</span>
               </a>
             )}
             <a href={t.privacyUrl || '/documents'} target="_blank" rel="noreferrer">
@@ -283,7 +294,7 @@ export default function MembershipForm({
                 <strong>{t.privacyTitle}</strong>
                 {t.privacyHint && <small>{t.privacyHint}</small>}
               </div>
-              <span>Öffnen</span>
+              <span>{ui.open}</span>
             </a>
           </div>
           {kind === 'new' && (
@@ -315,7 +326,7 @@ export default function MembershipForm({
               {t.backButton}
             </button>
             <button className="button" disabled={!preview && (busy || !config.open)}>
-              {busy ? 'Wird übermittelt …' : kind === 'new' ? t.submitNew : t.submitExisting}{' '}
+              {busy ? ui.sending : kind === 'new' ? t.submitNew : t.submitExisting}{' '}
               <span aria-hidden="true">→</span>
             </button>
           </div>
@@ -327,7 +338,7 @@ export default function MembershipForm({
           {t.contactEmail ? (
             <a href={'mailto:' + t.contactEmail}>{t.helpLink}</a>
           ) : (
-            'Deine Vereinsverwaltung hilft dir weiter.'
+            ui.fallbackHelp
           )}
         </p>
       )}
@@ -335,41 +346,30 @@ export default function MembershipForm({
   );
 }
 
-function QuestionField({ question: q }: { question: Question }) {
+function QuestionField({ question: q, locale }: { question: Question; locale: Locale }) {
   const name = 'q:' + q.id;
-  const hint = q.help ? <small className="question-help">{q.help}</small> : null;
+  const localized = localizeQuestion(q, locale);
+  const ui = UI[locale];
+  const hint = localized.help ? <small className="question-help">{localized.help}</small> : null;
   if (q.type === 'checkbox')
     return (
       <label className="check">
         <input type="checkbox" name={name} required={q.required} />
-        <span>
-          {q.label}
-          {hint}
-        </span>
+        <span>{localized.label}{hint}</span>
       </label>
     );
   return (
     <label className="question">
-      <span>
-        {q.label}
-        {!q.required && <span className="optional"> (optional)</span>}
-      </span>
+      <span>{localized.label}{!q.required && <span className="optional"> ({ui.optional})</span>}</span>
       {q.type === 'select' ? (
         <select name={name} required={q.required} defaultValue="">
-          <option value="" disabled={q.required}>
-            Bitte wählen …
-          </option>
-          {q.options.map((option) => (
-            <option key={option}>{option}</option>
+          <option value="" disabled={q.required}>{ui.choose}</option>
+          {q.options.map((option, i) => (
+            <option key={option} value={option}>{localized.options[i] ?? option}</option>
           ))}
         </select>
       ) : q.type === 'textarea' ? (
-        <textarea
-          name={name}
-          required={q.required}
-          rows={3}
-          maxLength={QUESTION_LIMITS.longAnswer}
-        />
+        <textarea name={name} required={q.required} rows={3} maxLength={QUESTION_LIMITS.longAnswer} />
       ) : (
         <input name={name} required={q.required} maxLength={QUESTION_LIMITS.answer} />
       )}

@@ -219,6 +219,7 @@ export const FIELDS = define({
   labelEmail: { label: 'Feld „E-Mail-Adresse“', value: 'E-Mail-Adresse', max: 40 },
   labelPhone: { label: 'Feld „Telefonnummer“', value: 'Telefonnummer', max: 40 },
   labelRoom: { label: 'Feld „Zimmernummer“', value: 'Zimmernummer', max: 40 },
+  labelMembershipStart: { label: 'Feld „Eintrittsmonat und -jahr“', value: 'Eintrittsmonat und -jahr', max: 80 },
   emailPlaceholder: {
     label: 'Beispiel im E-Mail-Feld',
     value: 'du@beispiel.de',
@@ -461,12 +462,17 @@ export type Audience = 'all' | 'new' | 'existing';
 export type Question = {
   id: string;
   label: string;
+  /** Optional English translation shown when the visitor selects EN. */
+  labelEn?: string;
   type: QuestionType;
   required: boolean;
   /** Choices for type "select". */
   options: string[];
+  /** Optional English translations corresponding by index to options. */
+  optionsEn?: string[];
   appliesTo: Audience;
   help: string;
+  helpEn?: string;
 };
 export const QUESTION_TYPES: [QuestionType, string][] = [
   ['text', 'Kurzer Text'],
@@ -564,6 +570,7 @@ export const GROUPS: Group[] = [
       'emailPlaceholder',
       'labelPhone',
       'labelRoom',
+      'labelMembershipStart',
       'fieldHint',
       'nextButton',
       'closedNotice',
@@ -663,6 +670,7 @@ export const FORM_TEXT_KEYS = [
   'emailPlaceholder',
   'labelPhone',
   'labelRoom',
+  'labelMembershipStart',
   'fieldHint',
   'nextButton',
   'closedNotice',

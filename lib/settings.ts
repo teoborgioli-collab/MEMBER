@@ -17,6 +17,7 @@ import {
   type TextKey,
   type TextSettings,
 } from './form-settings';
+import { localizeQuestion, type Locale } from './i18n';
 
 export type FieldErrors = Partial<Record<keyof Settings, string>>;
 
@@ -166,13 +167,17 @@ export function checkQuestions(raw: unknown): { questions: Question[]; error?: s
       return { questions: [], error: `${n}: ungültige Kennung.` };
     ids.add(id);
     const label = cleanLine(q.label) ?? '';
+    const labelEn = cleanLine(q.labelEn ?? '') ?? '';
     if (!label) return { questions: [], error: `${n}: Bitte einen Fragetext eingeben.` };
     if (label.length > L.label)
       return { questions: [], error: `${n}: Fragetext höchstens ${L.label} Zeichen.` };
     const help = cleanLine(q.help ?? '') ?? '';
-    if (help.length > L.help)
+    const helpEn = cleanLine(q.helpEn ?? '') ?? '';
+    if (help.length > L.help || helpEn.length > L.help)
       return { questions: [], error: `${n}: Hinweis höchstens ${L.help} Zeichen.` };
-    if (badChars(label) || badChars(help))
+    if (labelEn.length > L.label)
+      return { questions: [], error: `${n}: Englischer Fragetext höchstens ${L.label} Zeichen.` };
+    if (badChars(label) || badChars(labelEn) || badChars(help) || badChars(helpEn))
       return { questions: [], error: `${n}: enthält unzulässige Steuerzeichen.` };
     const type = q.type;
     if (type !== 'text' && type !== 'textarea' && type !== 'select' && type !== 'checkbox')
@@ -181,10 +186,12 @@ export function checkQuestions(raw: unknown): { questions: Question[]; error?: s
     if (appliesTo !== 'all' && appliesTo !== 'new' && appliesTo !== 'existing')
       return { questions: [], error: `${n}: ungültige Zielgruppe.` };
     let options: string[] = [];
+    let optionsEn: string[] = [];
     if (type === 'select') {
       if (!Array.isArray(q.options))
         return { questions: [], error: `${n}: Bitte Auswahlmöglichkeiten angeben.` };
       options = [...new Set(q.options.map(cleanLine).filter((o): o is string => Boolean(o)))];
+      if (Array.isArray(q.optionsEn)) optionsEn = q.optionsEn.map((o) => cleanLine(o) ?? '').slice(0, options.length);
       if (options.length < 2)
         return {
           questions: [],
@@ -192,13 +199,13 @@ export function checkQuestions(raw: unknown): { questions: Question[]; error?: s
         };
       if (options.length > L.options)
         return { questions: [], error: `${n}: höchstens ${L.options} Auswahlmöglichkeiten.` };
-      if (options.some((o) => o.length > L.option || badChars(o)))
+      if (options.some((o) => o.length > L.option || badChars(o)) || optionsEn.some((o) => o.length > L.option || badChars(o)))
         return {
           questions: [],
           error: `${n}: Auswahlmöglichkeiten höchstens ${L.option} Zeichen.`,
         };
     }
-    questions.push({ id, label, type, required: q.required === true, options, appliesTo, help });
+    questions.push({ id, label, labelEn, type, required: q.required === true, options, optionsEn, appliesTo, help, helpEn });
   }
   return { questions };
 }
@@ -210,28 +217,32 @@ export function checkAnswers(
   questions: Question[],
   kind: 'new' | 'existing',
   raw: unknown,
+  locale: Locale = 'de',
 ): { answers: Answer[]; error?: string } {
   const given =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const answers: Answer[] = [];
   for (const q of questionsFor(questions, kind)) {
     const value = given[q.id];
+    const shown = localizeQuestion(q, locale).label;
     let answer = '';
     if (q.type === 'checkbox') {
       const checked = value === true || value === 'on';
-      if (q.required && !checked) return { answers: [], error: `Bitte bestätige: ${q.label}` };
-      answer = checked ? 'Ja' : 'Nein';
+      if (q.required && !checked)
+        return { answers: [], error: locale === 'en' ? `Please confirm: ${shown}` : `Bitte bestätige: ${shown}` };
+      answer = checked ? (locale === 'en' ? 'Yes' : 'Ja') : (locale === 'en' ? 'No' : 'Nein');
     } else {
       answer = typeof value === 'string' ? value.replace(/\r\n?/g, '\n').trim() : '';
       if (q.type !== 'textarea') answer = answer.replace(/\s+/g, ' ');
       const max = q.type === 'textarea' ? QUESTION_LIMITS.longAnswer : QUESTION_LIMITS.answer;
       if (answer.length > max)
-        return { answers: [], error: `Die Antwort auf „${q.label}“ ist zu lang.` };
+        return { answers: [], error: locale === 'en' ? `The answer to “${shown}” is too long.` : `Die Antwort auf „${shown}“ ist zu lang.` };
       if (CONTROL_CHARS.test(answer.replace(/\n/g, '')) || BIDI_CONTROLS.test(answer))
-        return { answers: [], error: `Die Antwort auf „${q.label}“ enthält unzulässige Zeichen.` };
+        return { answers: [], error: locale === 'en' ? `The answer to “${shown}” contains invalid characters.` : `Die Antwort auf „${shown}“ enthält unzulässige Zeichen.` };
       if (q.type === 'select' && answer && !q.options.includes(answer))
-        return { answers: [], error: `Bitte wähle eine Antwort für „${q.label}“.` };
-      if (q.required && !answer) return { answers: [], error: `Bitte beantworte: ${q.label}` };
+        return { answers: [], error: locale === 'en' ? `Please choose an answer for “${shown}”.` : `Bitte wähle eine Antwort für „${shown}“.` };
+      if (q.required && !answer)
+        return { answers: [], error: locale === 'en' ? `Please answer: ${shown}` : `Bitte beantworte: ${shown}` };
     }
     answers.push({ id: q.id, question: q.label, answer });
   }
@@ -365,6 +376,7 @@ export function consentVersion(settings: Settings, kind: 'new' | 'existing') {
     q.type,
     q.required,
     q.options,
+    q.labelEn ?? '', q.helpEn ?? '', q.optionsEn ?? [],
   ]);
   return createHash('sha256')
     .update(JSON.stringify([kind, ...CONSENT_KEYS[kind].map((key) => settings[key]), questions]))

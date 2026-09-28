@@ -31,11 +31,14 @@ export default function QuestionsEditor({
       {
         id: newQuestionId(),
         label: '',
+        labelEn: '',
         type: 'text',
         required: false,
         options: [],
+        optionsEn: [],
         appliesTo: 'all',
         help: '',
+        helpEn: '',
       },
     ]);
 
@@ -49,7 +52,7 @@ export default function QuestionsEditor({
       {questions.length === 0 && (
         <p className="muted small">
           Noch keine zusätzlichen Fragen. Vorname, Nachname, Geburtsdatum, E-Mail, Telefon und
-          Zimmernummer werden immer abgefragt.
+          Zimmernummer werden immer abgefragt; bei bestehenden Mitgliedern zusätzlich Eintrittsmonat/-jahr.
         </p>
       )}
       {questions.map((q, index) => {
@@ -66,6 +69,16 @@ export default function QuestionsEditor({
                   maxLength={QUESTION_LIMITS.label}
                   placeholder="z. B. Wie bist du auf uns aufmerksam geworden?"
                   onChange={(e) => update(index, { label: e.target.value })}
+                />
+              </div>
+              <div className="field wide">
+                <label htmlFor={id('labelEn')}>Fragetext auf Englisch (optional)</label>
+                <input
+                  id={id('labelEn')}
+                  value={q.labelEn ?? ''}
+                  maxLength={QUESTION_LIMITS.label}
+                  placeholder="e.g. How did you hear about us?"
+                  onChange={(e) => update(index, { labelEn: e.target.value })}
                 />
               </div>
               <div className="field">
@@ -99,15 +112,26 @@ export default function QuestionsEditor({
                 </select>
               </div>
               {q.type === 'select' && (
-                <div className="field wide">
-                  <label htmlFor={id('options')}>Auswahlmöglichkeiten (eine pro Zeile)</label>
-                  <textarea
-                    id={id('options')}
-                    rows={4}
-                    value={q.options.join('\n')}
-                    onChange={(e) => update(index, { options: e.target.value.split('\n') })}
-                  />
-                </div>
+                <>
+                  <div className="field wide">
+                    <label htmlFor={id('options')}>Auswahlmöglichkeiten (eine pro Zeile)</label>
+                    <textarea
+                      id={id('options')}
+                      rows={4}
+                      value={q.options.join('\n')}
+                      onChange={(e) => update(index, { options: e.target.value.split('\n') })}
+                    />
+                  </div>
+                  <div className="field wide">
+                    <label htmlFor={id('optionsEn')}>Auswahlmöglichkeiten auf Englisch (optional, gleiche Reihenfolge)</label>
+                    <textarea
+                      id={id('optionsEn')}
+                      rows={4}
+                      value={(q.optionsEn ?? []).join('\n')}
+                      onChange={(e) => update(index, { optionsEn: e.target.value.split('\n') })}
+                    />
+                  </div>
+                </>
               )}
               <div className="field wide">
                 <label htmlFor={id('help')}>Hinweis unter der Frage (optional)</label>
@@ -116,6 +140,15 @@ export default function QuestionsEditor({
                   value={q.help}
                   maxLength={QUESTION_LIMITS.help}
                   onChange={(e) => update(index, { help: e.target.value })}
+                />
+              </div>
+              <div className="field wide">
+                <label htmlFor={id('helpEn')}>Hinweis auf Englisch (optional)</label>
+                <input
+                  id={id('helpEn')}
+                  value={q.helpEn ?? ''}
+                  maxLength={QUESTION_LIMITS.help}
+                  onChange={(e) => update(index, { helpEn: e.target.value })}
                 />
               </div>
             </div>

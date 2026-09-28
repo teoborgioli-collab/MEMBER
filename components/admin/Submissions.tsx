@@ -1,6 +1,7 @@
 'use client';
 import { Fragment, useEffect, useState } from 'react';
 import { mailErrorMessage } from '../../lib/mail';
+import { monthYear } from '../../lib/i18n';
 import type { Status, Submission } from '../../lib/validation';
 import { api, ApiError, dateTime, download } from './api';
 
@@ -239,6 +240,14 @@ export default function Submissions({
             </dd>
             <dt>Zimmernummer</dt>
             <dd>{row.room || <span className="muted">nicht angegeben</span>}</dd>
+            {row.kind === 'existing' && (
+              <>
+                <dt>Mitglied seit</dt>
+                <dd>{row.membership_start_month ? monthYear(row.membership_start_month, 'de') : <span className="muted">nicht angegeben</span>}</dd>
+              </>
+            )}
+            <dt>Sprache</dt>
+            <dd>{row.locale === 'en' ? 'Englisch' : 'Deutsch'}</dd>
             {row.answers?.map((a) => (
               <Fragment key={a.id}>
                 <dt>{a.question}</dt>
@@ -352,6 +361,11 @@ export default function Submissions({
                   </button>
                 )}
               </>
+            )}
+            {row.kind === 'existing' && row.status === 'reviewed' && row.membership_start_month && (
+              <button className="button" disabled={!!working} onClick={() => downloadPdf(row)}>
+                {working === row.id + ':pdf' ? 'PDF wird erstellt …' : 'Mitgliedsbescheinigung herunterladen'}
+              </button>
             )}
             {(!row.club_notified_at || !row.confirmation_sent_at) && (
               <button

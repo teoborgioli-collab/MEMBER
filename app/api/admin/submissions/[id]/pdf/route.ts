@@ -18,10 +18,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     const { id } = await params;
     if (!z.uuid().safeParse(id).success) throw new HttpError(400, 'Ungültiger Eintrag.');
     const [row] = await db()`
-      SELECT id, kind, status, first_name, last_name, decided_at FROM submissions WHERE id=${id}`;
+      SELECT id, kind, status, locale, first_name, last_name, decided_at, membership_start_month FROM submissions WHERE id=${id}`;
     if (!row) throw new HttpError(404, 'Eintrag nicht gefunden.');
-    if (row.kind !== 'new' || row.status !== 'approved')
-      throw new HttpError(409, 'Eine Bestätigung ist erst nach Annahme verfügbar.');
+    const available = (row.kind === 'new' && row.status === 'approved') || (row.kind === 'existing' && row.status === 'reviewed' && row.membership_start_month);
+    if (!available) throw new HttpError(409, 'Eine Bestätigung ist erst nach Annahme bzw. Abgleich verfügbar.');
     const { settings } = await fetchSettings();
     let bytes: Uint8Array;
     try {
@@ -33,6 +33,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
           first_name: row.first_name,
           last_name: row.last_name,
           decided_at: row.decided_at,
+          membership_start_month: row.membership_start_month,
+          locale: row.locale,
         },
         Object.fromEntries(PDF_TEXT_KEYS.map((key) => [key, settings[key]])) as PdfTexts,
       );

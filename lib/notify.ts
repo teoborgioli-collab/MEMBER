@@ -3,6 +3,7 @@ import { errorCode } from './errors';
 import type { Settings } from './form-settings';
 import { MailError, mailConfig, sendMail } from './mail';
 import { consume, globalKey } from './rate';
+import { monthYear, type Locale } from './i18n';
 
 // Two automatic e-mails per submission, sent only after it has been stored:
 //  1. to the club inbox, with the submitted data, so the committee knows when to act;
@@ -18,12 +19,14 @@ export const RECEIPTS_PER_HOUR = 60;
 type Row = {
   id: string;
   kind: 'new' | 'existing';
+  locale: Locale;
   first_name: string;
   last_name: string;
   birth_date: string;
   email: string;
   phone: string | null;
   room: string | null;
+  membership_start_month: string | null;
   answers: { question: string; answer: string }[];
   created_at: Date;
   club_notified_at: Date | null;
@@ -67,6 +70,7 @@ export function clubMessage(row: Row, adminUrl: string) {
         ['E-Mail', row.email],
         ['Telefon', row.phone ?? '–'],
         ['Zimmernummer', row.room ?? '–'],
+        ...(row.kind === 'existing' && row.membership_start_month ? [['Mitglied seit', monthYear(row.membership_start_month, 'de')] as [string,string]] : []),
         ['Eingegangen', berlin(row.created_at)],
         ['Vorgangsnummer', row.id],
       ]),
@@ -84,46 +88,46 @@ export function clubMessage(row: Row, adminUrl: string) {
 
 export function receiptMessage(row: Row, club: string) {
   const isNew = row.kind === 'new';
-  return {
-    subject: isNew
-      ? `Eingangsbestätigung: dein Mitgliedsantrag – ${club}`
-      : `Eingangsbestätigung: deine Mitgliedsdaten – ${club}`,
+  const en = row.locale === 'en';
+  if (en) return {
+    subject: isNew ? `We received your membership application – ${club}` : `We received your updated membership details – ${club}`,
     text: [
-      `Hallo ${row.first_name},`,
-      '',
+      `Hello ${row.first_name},`, '',
       isNew
-        ? `vielen Dank für deinen Mitgliedsantrag. Wir haben ihn am ${berlin(row.created_at)} erhalten.`
-        : `vielen Dank! Wir haben deine aktualisierten Mitgliedsdaten am ${berlin(row.created_at)} erhalten.`,
+        ? `Thank you for your membership application. We received it on ${row.created_at.toLocaleString('en-GB', { timeZone: 'Europe/Berlin', day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' })}.`
+        : `Thank you. We received your updated membership details on ${row.created_at.toLocaleString('en-GB', { timeZone: 'Europe/Berlin', day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' })}.`,
       '',
       ...(isNew
-        ? [
-            'Bitte beachte: Dies ist nur eine Eingangsbestätigung. Deine Mitgliedschaft ist damit',
-            'noch nicht angenommen. Über die Aufnahme entscheidet der Verein nach seiner Satzung;',
-            'wir melden uns nach der Entscheidung gesondert bei dir.',
-          ]
-        : [
-            'Wir gleichen deine Angaben mit unserem Mitgliederverzeichnis ab. Bei Rückfragen',
-            'melden wir uns bei dir.',
-          ]),
-      '',
-      'Deine Angaben:',
+        ? ['Please note: this is only a receipt confirmation. Your membership has not yet been accepted.', 'The association will review your application and contact you after a decision has been made.']
+        : ['We will compare your information with our membership records and contact you if we have any questions.']),
+      '', 'Your details:',
       table([
         ['Name', `${row.first_name} ${row.last_name}`],
-        ['Geburtsdatum', day(row.birth_date)],
-        ['E-Mail', row.email],
-        ['Telefon', row.phone ?? '–'],
-        ['Zimmernummer', row.room ?? '–'],
+        ['Date of birth', row.birth_date.split('-').reverse().join('.')],
+        ['Email', row.email], ['Telephone', row.phone ?? '–'], ['Room number', row.room ?? '–'],
+        ...(row.kind === 'existing' && row.membership_start_month ? [['Member since', monthYear(row.membership_start_month, 'en')] as [string,string]] : []),
       ]),
-      `  Vorgangsnummer: ${row.id}`,
+      `  Reference number: ${row.id}`, '',
+      'If anything is incorrect, simply reply to this email.', '',
+      'Kind regards', club, '', '-- ',
+      'This email was sent automatically because your address was entered in the membership portal.',
+      'If you did not submit the form, you can ignore this email.',
+    ].join('\n'),
+  };
+  return {
+    subject: isNew ? `Eingangsbestätigung: dein Mitgliedsantrag – ${club}` : `Eingangsbestätigung: deine Mitgliedsdaten – ${club}`,
+    text: [
+      `Hallo ${row.first_name},`, '',
+      isNew ? `vielen Dank für deinen Mitgliedsantrag. Wir haben ihn am ${berlin(row.created_at)} erhalten.` : `vielen Dank! Wir haben deine aktualisierten Mitgliedsdaten am ${berlin(row.created_at)} erhalten.`,
       '',
-      'Falls etwas nicht stimmt, antworte einfach auf diese E-Mail.',
-      '',
-      'Viele Grüße',
-      club,
-      '',
-      '-- ',
-      'Diese E-Mail wurde automatisch versendet, weil deine Adresse im Mitgliederportal',
-      'angegeben wurde. Falls du das Formular nicht ausgefüllt hast, kannst du sie ignorieren.',
+      ...(isNew ? ['Bitte beachte: Dies ist nur eine Eingangsbestätigung. Deine Mitgliedschaft ist damit', 'noch nicht angenommen. Über die Aufnahme entscheidet der Verein nach seiner Satzung;', 'wir melden uns nach der Entscheidung gesondert bei dir.'] : ['Wir gleichen deine Angaben mit unserem Mitgliederverzeichnis ab. Bei Rückfragen', 'melden wir uns bei dir.']),
+      '', 'Deine Angaben:',
+      table([
+        ['Name', `${row.first_name} ${row.last_name}`], ['Geburtsdatum', day(row.birth_date)], ['E-Mail', row.email], ['Telefon', row.phone ?? '–'], ['Zimmernummer', row.room ?? '–'],
+        ...(row.kind === 'existing' && row.membership_start_month ? [['Mitglied seit', monthYear(row.membership_start_month, 'de')] as [string,string]] : []),
+      ]),
+      `  Vorgangsnummer: ${row.id}`, '', 'Falls etwas nicht stimmt, antworte einfach auf diese E-Mail.', '', 'Viele Grüße', club, '', '-- ',
+      'Diese E-Mail wurde automatisch versendet, weil deine Adresse im Mitgliederportal', 'angegeben wurde. Falls du das Formular nicht ausgefüllt hast, kannst du sie ignorieren.',
     ].join('\n'),
   };
 }
@@ -139,7 +143,7 @@ export async function sendSubmissionEmails(id: string, settings: Settings) {
   const failures: string[] = [];
   try {
     const [row] = (await sql`
-      SELECT id, kind, first_name, last_name, birth_date::text AS birth_date, email, phone, room,
+      SELECT id, kind, locale, first_name, last_name, birth_date::text AS birth_date, email, phone, room, membership_start_month,
              answers, created_at, club_notified_at, confirmation_sent_at
       FROM submissions WHERE id = ${id}`) as unknown as Row[];
     if (!row) return;

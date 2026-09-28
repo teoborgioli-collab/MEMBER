@@ -1,6 +1,7 @@
 import './globals.css';
 import type { Metadata } from 'next';
 import { SiteFooter, SiteHeader } from '../components/SiteChrome';
+import { LocaleProvider } from '../components/LocaleProvider';
 import { loadPortal } from '../lib/portal';
 
 // Texts come from the database and can change at any time, so nothing is prerendered.
@@ -21,6 +22,7 @@ export default async function Layout({ children }: { children: React.ReactNode }
   return (
     <html lang="de">
       <body>
+        <LocaleProvider>
         <SiteHeader clubName={settings.clubName} headerNote={settings.headerNote} />
         {children}
         <SiteFooter
@@ -28,6 +30,7 @@ export default async function Layout({ children }: { children: React.ReactNode }
           privacyUrl={settings.privacyUrl}
           imprintUrl={settings.imprintUrl}
         />
+        </LocaleProvider>
       </body>
     </html>
   );

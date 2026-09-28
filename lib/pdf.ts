@@ -3,6 +3,7 @@ import fontkit from '@pdf-lib/fontkit';
 import { pdfFont } from './font';
 import type { TextSettings } from './form-settings';
 import type { Submission } from './validation';
+import { monthYear, type Locale } from './i18n';
 
 export const PDF_TEXT_KEYS = [
   'clubName',
@@ -100,39 +101,32 @@ export function wrapLines(value: string, font: PDFFont, size: number, width = WI
 export async function confirmationPdf(
   row: Pick<Submission, 'id' | 'kind' | 'status' | 'first_name' | 'last_name'> & {
     decided_at: string | Date | null;
+    membership_start_month?: string | null;
+    locale?: Locale;
   },
   texts: PdfTexts,
 ) {
-  if (row.kind !== 'new' || row.status !== 'approved' || !row.decided_at)
-    throw new Error('Approval required');
-  const club = texts.clubName.trim() || 'Unser Verein';
+  const validNew = row.kind === 'new' && row.status === 'approved' && row.decided_at;
+  const validExisting = row.kind === 'existing' && row.status === 'reviewed' && row.membership_start_month;
+  if (!validNew && !validExisting) throw new Error('Confirmation unavailable');
+  const locale: Locale = row.locale === 'en' ? 'en' : 'de';
+  const club = texts.clubName.trim() || (locale === 'en' ? 'Our Association' : 'Unser Verein');
   const name = `${row.first_name} ${row.last_name}`;
-  // Only texts that are printed are checked (callers may pass all settings).
   const printed = PDF_TEXT_KEYS.map((key) => texts[key]).join('');
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
   const font = await doc.embedFont(await pdfFont(), { subset: true });
-
-  // Reject unsupported glyphs rather than silently changing a member's name.
   const supported = new Set(font.getCharacterSet());
-  const unsupported = [
-    ...new Set(
-      [...(club + name + printed)].filter(
-        (char) => char !== '\n' && !supported.has(char.codePointAt(0)!),
-      ),
-    ),
-  ];
+  const unsupported = [...new Set([...(club + name + printed)].filter((char) => char !== '\n' && !supported.has(char.codePointAt(0)!)))];
   if (unsupported.length) throw new PdfGlyphError(unsupported);
 
   const green = rgb(0.07, 0.38, 0.28);
   const ink = rgb(0.09, 0.17, 0.22);
   const line = rgb(0.82, 0.87, 0.86);
-  const date = new Date(row.decided_at).toLocaleDateString('de-DE', {
-    timeZone: 'Europe/Berlin',
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  });
+  const date = row.decided_at ? new Date(row.decided_at).toLocaleDateString(locale === 'en' ? 'en-GB' : 'de-DE', {
+    timeZone: 'Europe/Berlin', day: '2-digit', month: 'long', year: 'numeric',
+  }) : '';
+  const memberSince = row.membership_start_month ? monthYear(row.membership_start_month, locale) : date;
 
   let page: PDFPage;
   let y = 0;
@@ -140,19 +134,11 @@ export async function confirmationPdf(
     const first = doc.getPageCount() === 0;
     page = doc.addPage(A4);
     page.drawRectangle({ x: 0, y: 817, width: 596, height: 25, color: green });
-    page.drawLine({
-      start: { x: LEFT, y: 100 },
-      end: { x: 540, y: 100 },
-      thickness: 1,
-      color: line,
-    });
-    page.drawText('Bestätigung der Aufnahmeentscheidung · ' + date, {
-      x: LEFT,
-      y: 77,
-      font,
-      size: 9,
-      color: ink,
-    });
+    page.drawLine({ start: { x: LEFT, y: 100 }, end: { x: 540, y: 100 }, thickness: 1, color: line });
+    const footer = locale === 'en'
+      ? `Membership confirmation · ${memberSince}`
+      : `Mitgliedsbestätigung · ${memberSince}`;
+    page.drawText(footer, { x: LEFT, y: 77, font, size: 9, color: ink });
     y = first ? 738 : 770;
   };
   const text = (value: string, size = 12, gap = 22) => {
@@ -162,28 +148,37 @@ export async function confirmationPdf(
       y -= gap;
     }
   };
-  const space = (points: number) => {
-    y -= points;
-  };
+  const space = (points: number) => { y -= points; };
 
   addPage();
   text(club, 18, 28);
   space(40);
-  text(texts.pdfTitle, 28, 38);
+  text(locale === 'en' ? 'Membership confirmation' : texts.pdfTitle, 28, 38);
   space(18);
-  text(texts.pdfIntro, 12, 24);
-  space(12);
-  text(name, 20, 29);
-  space(25);
-  text('Aufnahme bestätigt am: ' + date);
-  text('Vorgangsnummer: ' + row.id, 10);
+  if (row.kind === 'existing') {
+    text(locale === 'en' ? 'This is to confirm that' : 'Hiermit bestätigen wir, dass', 12, 24);
+    space(12); text(name, 20, 29); space(25);
+    text(locale === 'en' ? `has been a member since ${memberSince}.` : `seit ${memberSince} Mitglied der ${club} ist.`);
+  } else {
+    text(locale === 'en' ? 'We confirm the admission as a member of' : texts.pdfIntro, 12, 24);
+    space(12); text(name, 20, 29); space(25);
+    text(locale === 'en' ? `Membership effective from: ${memberSince}` : 'Aufnahme bestätigt am: ' + memberSince);
+  }
+  text((locale === 'en' ? 'Reference number: ' : 'Vorgangsnummer: ') + row.id, 10);
   space(35);
-  if (texts.pdfWelcome) text(texts.pdfWelcome, 14, 26);
-  if (texts.pdfWelcomeText) text(texts.pdfWelcomeText);
+  if (row.kind === 'new') {
+    if (locale === 'en') {
+      text('Welcome to our association!', 14, 26);
+      text('We look forward to having you with us.');
+    } else {
+      if (texts.pdfWelcome) text(texts.pdfWelcome, 14, 26);
+      if (texts.pdfWelcomeText) text(texts.pdfWelcomeText);
+    }
+  }
   space(55);
-  text(texts.pdfSignature);
+  text(locale === 'en' ? 'Association administration' : texts.pdfSignature);
 
-  doc.setTitle(texts.pdfTitle);
+  doc.setTitle(locale === 'en' ? 'Membership confirmation' : texts.pdfTitle);
   doc.setAuthor(club);
   doc.setCreator('Mitgliederportal');
   return doc.save();

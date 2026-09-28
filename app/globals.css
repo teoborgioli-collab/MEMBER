@@ -1179,3 +1179,5 @@ select {
   font-size: 16px;
   margin: 26px 0 4px;
 }
+
+.header-actions{display:flex;align-items:center;gap:1rem}.locale-switch{display:inline-flex;border:1px solid #cbd8d5;border-radius:999px;padding:2px;background:#fff}.locale-switch button{border:0;background:transparent;border-radius:999px;padding:.35rem .55rem;font:inherit;font-size:.78rem;font-weight:700;cursor:pointer;color:#52666d}.locale-switch button.active{background:#126148;color:#fff}@media(max-width:700px){.header-actions{gap:.5rem}.header-note{display:none}.locale-switch button{padding:.3rem .48rem}}
