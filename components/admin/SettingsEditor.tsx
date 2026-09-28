@@ -11,6 +11,7 @@ import {
 } from '../../lib/form-settings';
 import { api, ApiError, dateTime, download } from './api';
 import PortalPreview from './PortalPreview';
+import QuestionsEditor from './QuestionsEditor';
 
 type Infra = { database: boolean; adminPassword: boolean; sessionSecret: boolean; appUrl: boolean };
 type Loaded = {
@@ -81,6 +82,7 @@ export default function SettingsEditor({
       !!loaded &&
       !!draft &&
       (draft.portalOpen !== loaded.settings.portalOpen ||
+        JSON.stringify(draft.questions) !== JSON.stringify(loaded.settings.questions) ||
         TEXT_KEYS.some((key) => draft[key] !== loaded.settings[key])),
     [loaded, draft],
   );
@@ -143,6 +145,12 @@ export default function SettingsEditor({
     setErrors((current) => ({ ...current, ...fields }));
     const first = TEXT_KEYS.find((key) => fields[key]);
     if (first) reveal(first);
+    else if (fields.questions) {
+      setOpenGroups((current) => new Set(current).add('schritt1'));
+      requestAnimationFrame(() =>
+        document.getElementById('f-questions')?.scrollIntoView({ block: 'center' }),
+      );
+    }
   }
 
   function failureText(err: unknown, fallback: string) {
@@ -295,7 +303,11 @@ export default function SettingsEditor({
                 <strong>{group.title}</strong>
                 <small>{group.description}</small>
               </span>
-              {count > 0 && <span className="pill error-pill">{count} Fehler</span>}
+              {count + (group.id === 'schritt1' && errors.questions ? 1 : 0) > 0 && (
+                <span className="pill error-pill">
+                  {count + (group.id === 'schritt1' && errors.questions ? 1 : 0)} Fehler
+                </span>
+              )}
             </summary>
             <div className="editor-fields">
               {group.keys.map((key) => (
@@ -309,6 +321,22 @@ export default function SettingsEditor({
                 />
               ))}
             </div>
+            {group.id === 'schritt1' && (
+              <>
+                <h3 className="subheading">Zusätzliche Fragen</h3>
+                <p className="muted small">
+                  Erscheinen im ersten Schritt unter den festen Feldern. Antworten werden mit jeder
+                  Einreichung gespeichert und in der Vereins-E-Mail, im Adminbereich und im Export
+                  angezeigt. Wer das Formular gerade ausfüllt, sieht geänderte Fragen vor dem
+                  Absenden.
+                </p>
+                <QuestionsEditor
+                  questions={draft.questions}
+                  error={errors.questions}
+                  onChange={(questions) => update('questions', questions)}
+                />
+              </>
+            )}
             {group.id === 'email' && <EmailPreview draft={draft} />}
             {group.id === 'pdf' && (
               <div className="editor-extra">

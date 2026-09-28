@@ -9,15 +9,19 @@ import {
   pageConsent,
   startApp,
   startDatabase,
+  startMailServer,
   migrate,
+  sleep,
   visible,
   type App,
   type Db,
+  type MailServer,
 } from './harness';
 
 let db: Db;
 let app: App;
 let admin: Client;
+let mail: MailServer;
 let revision = 0;
 
 const html = async (route: string, client?: Client) => {
@@ -38,12 +42,14 @@ async function saveSettings(patch: Record<string, unknown>) {
 before(async () => {
   db = await startDatabase();
   await migrate(db);
-  app = await startApp(db);
+  mail = await startMailServer();
+  app = await startApp(db, { RESEND_API_KEY: 're_test_key', RESEND_API_URL: mail.url });
   admin = new Client(app.base);
 });
 
 after(async () => {
   await app?.stop();
+  await mail?.stop();
   await db?.stop();
 });
 
@@ -137,6 +143,7 @@ describe('request hardening', () => {
         401,
       );
       assert.equal((await c.json('/api/admin/pdf-preview', { json: {} })).status, 401);
+      assert.equal((await c.json('/api/admin/export')).status, 401);
     }
   });
 });
@@ -305,6 +312,11 @@ describe('submissions', () => {
       { birthDate: '1990-02-30' },
       { email: 'keine-adresse' },
       { firstName: '' },
+      { phone: undefined },
+      { phone: '' },
+      { phone: 'keine Nummer' },
+      { room: undefined },
+      { room: '   ' },
       { consent: 'x' },
     ]) {
       const res = await visitor.json('/api/submissions', {
@@ -328,12 +340,15 @@ describe('submissions', () => {
   test('the record keeps documents, version and the exact confirmed wording', async () => {
     const rows = await db.sql`
       SELECT id, kind, email, birth_date::text AS birth_date, status, document_version,
-             statutes_url, privacy_url, acknowledgements
+             statutes_url, privacy_url, acknowledgements, phone, room, answers
       FROM submissions ORDER BY created_at`;
     assert.equal(rows.length, 2);
     const [created, update] = rows;
     assert.equal(created.email, 'juergen.oeztuerk@example.org');
     assert.equal(created.birth_date, '1990-05-17');
+    assert.equal(created.phone, '+49 30 1234567');
+    assert.equal(created.room, 'B 214');
+    assert.deepEqual(created.answers, []);
     assert.equal(created.status, 'pending');
     assert.equal(created.document_version, '2026-09-28');
     assert.equal(created.statutes_url, '/documents/satzung-2026-09.pdf');
@@ -356,6 +371,8 @@ describe('submissions', () => {
     assert.equal(data.hasMore, false);
     const row = data.rows.find((r: any) => r.id === ids.new);
     assert.equal(row.birth_date, '1990-05-17');
+    assert.equal(row.phone, '+49 30 1234567');
+    assert.equal(row.room, 'B 214');
     assert.equal(row.acknowledgements.length, 3);
     assert.equal(data.mail.clubName, COMPLETE.clubName);
     assert.match(data.mail.subject, /\{verein\}/);
@@ -509,6 +526,359 @@ describe('submissions', () => {
     const seen = new Set([...first.data.rows, ...second.data.rows].map((r: any) => r.id));
     assert.equal(seen.size, 55);
     await db.sql`DELETE FROM submissions WHERE first_name = 'Test'`;
+  });
+});
+
+describe('automatic e-mails', () => {
+  const submit = (overrides: Record<string, unknown> = {}) =>
+    pageConsent(app.base).then((consent) => {
+      const application = newApplication(consent, overrides);
+      return new Client(app.base)
+        .json('/api/submissions', { json: application })
+        .then((res) => ({ res, application }));
+    });
+  // Read through the admin API: with PGlite a second client must not query while the app is
+  // still sending in the background.
+  const row = async (id: string) =>
+    (await admin.json('/api/admin/submissions?status=all')).data.rows.find((r: any) => r.id === id);
+  const until = async (check: () => Promise<boolean>) => {
+    const deadline = Date.now() + 10_000;
+    while (!(await check())) {
+      if (Date.now() > deadline) throw new Error('timed out');
+      await sleep(50);
+    }
+  };
+
+  before(async () => {
+    await db.sql`DELETE FROM rate_limits`;
+    mail.mails.length = 0;
+  });
+
+  test('a new application sends the club notification and a receipt, once', async () => {
+    const { res, application } = await submit({ lastName: 'Mailtest' });
+    assert.equal(res.status, 201);
+    const [club, receipt] = await mail.waitFor(2);
+    assert.equal(club.from, 'SSV Potsdamer Straße <info@ssvpotsdamerstr.de>');
+    assert.deepEqual(club.to, ['info@ssvpotsdamerstr.de']);
+    assert.equal(club.reply_to, 'juergen.oeztuerk@example.org');
+    assert.equal(club.subject, 'Neue Mitgliedererfassung – Jürgen Mailtest');
+    assert.equal(club.authorization, 'Bearer re_test_key');
+    assert.equal(club.idempotencyKey, application.requestId + '-verein');
+    assert.equal(club.headers?.['Auto-Submitted'], 'auto-generated');
+    for (const part of [
+      'Neuer Mitgliedsantrag',
+      'Jürgen',
+      'Mailtest',
+      '17.05.1990',
+      'juergen.oeztuerk@example.org',
+      '+49 30 1234567',
+      'B 214',
+      application.requestId,
+      app.base + '/admin',
+    ])
+      assert.ok(club.text.includes(part), part);
+    assert.match(club.text, /Eingegangen:\s+\d{2}\.\d{2}\.\d{4}, \d{2}:\d{2} Uhr/);
+
+    assert.deepEqual(receipt.to, ['juergen.oeztuerk@example.org']);
+    assert.equal(receipt.reply_to, 'info@ssvpotsdamerstr.de');
+    assert.equal(receipt.idempotencyKey, application.requestId + '-bestaetigung');
+    assert.match(receipt.subject, /^Eingangsbestätigung: dein Mitgliedsantrag – /);
+    assert.match(receipt.text, /noch nicht angenommen/);
+
+    await until(async () => Boolean((await row(application.requestId)).confirmation_sent_at));
+    const stored = await row(application.requestId);
+    assert.ok(stored.club_notified_at);
+    assert.equal(stored.mail_error, null);
+
+    // Sending the same request again (double click, lost response) sends nothing new.
+    const requests = mail.state.requests;
+    const retry = await new Client(app.base).json('/api/submissions', { json: application });
+    assert.equal(retry.status, 201);
+    await sleep(700);
+    assert.equal(mail.mails.length, 2);
+    assert.equal(mail.state.requests, requests);
+  });
+
+  test('an existing member gets a receipt for the data update', async () => {
+    mail.mails.length = 0;
+    const { res } = await submit({
+      kind: 'existing',
+      statutesAccepted: undefined,
+      lastName: 'Mailtest',
+    });
+    assert.equal(res.status, 201);
+    const [club, receipt] = await mail.waitFor(2);
+    assert.match(club.text, /Bestehendes Mitglied \(Datenaktualisierung\)/);
+    assert.match(receipt.subject, /^Eingangsbestätigung: deine Mitgliedsdaten – /);
+    assert.match(receipt.text, /aktualisierten Mitgliedsdaten/);
+    assert.doesNotMatch(receipt.text, /Mitgliedsantrag/);
+  });
+
+  test('a slow mail service does not delay the visitor', async () => {
+    mail.mails.length = 0;
+    mail.state.delayMs = 2500;
+    try {
+      const started = Date.now();
+      const { res } = await submit({ lastName: 'Mailtest' });
+      assert.equal(res.status, 201);
+      assert.ok(Date.now() - started < 2000, `took ${Date.now() - started} ms`);
+      await mail.waitFor(2, 15_000);
+    } finally {
+      mail.state.delayMs = 0;
+    }
+  });
+
+  test('a failed e-mail keeps the submission and can be sent again from the admin area', async () => {
+    mail.mails.length = 0;
+    mail.state.failWith = 422;
+    const { res, application } = await submit({ lastName: 'Mailtest' });
+    const id = application.requestId;
+    assert.equal(res.status, 201);
+    await until(async () => Boolean((await row(id))?.mail_error));
+    let stored = await row(id);
+    assert.equal(
+      stored.mail_error,
+      'verein:HTTP_422_validation_error bestaetigung:HTTP_422_validation_error',
+    );
+    assert.equal(stored.club_notified_at, null);
+
+    const listed = (await admin.json('/api/admin/submissions?status=all')).data.rows.find(
+      (r: any) => r.id === id,
+    );
+    assert.ok(listed.mail_error);
+
+    const act = () => admin.json('/api/admin/submissions/' + id, { json: { action: 'mails' } });
+    const failed = await act();
+    assert.equal(failed.status, 502);
+    assert.match(failed.data.error, /Resend hat die Nachricht abgelehnt/);
+
+    mail.state.failWith = 0;
+    assert.equal((await act()).status, 200);
+    assert.equal(mail.mails.length, 2);
+    stored = await row(id);
+    assert.ok(stored.club_notified_at && stored.confirmation_sent_at);
+    assert.equal(stored.mail_error, null);
+    // Nothing is sent twice.
+    assert.equal((await act()).status, 200);
+    assert.equal(mail.mails.length, 2);
+    assert.equal(
+      (
+        await admin.json('/api/admin/submissions/' + crypto.randomUUID(), {
+          json: { action: 'mails' },
+        })
+      ).status,
+      404,
+    );
+  });
+
+  test('only the missing e-mail is sent again', async () => {
+    mail.mails.length = 0;
+    const { application } = await submit({ lastName: 'Mailtest' });
+    const id = application.requestId;
+    await mail.waitFor(2);
+    await until(async () => Boolean((await row(id)).confirmation_sent_at));
+    await db.sql`UPDATE submissions SET confirmation_sent_at = NULL WHERE id = ${id}`;
+    const requests = mail.state.requests;
+    assert.equal(
+      (await admin.json('/api/admin/submissions/' + id, { json: { action: 'mails' } })).status,
+      200,
+    );
+    // The receipt goes out again with the same idempotency key (Resend itself would drop it
+    // within 24 hours); the club is not notified twice.
+    assert.equal(mail.state.requests, requests + 1);
+    assert.equal(mail.mails.length, 2);
+    assert.ok((await row(id)).confirmation_sent_at);
+  });
+
+  after(async () => {
+    await db.sql`DELETE FROM submissions WHERE last_name = 'Mailtest'`;
+  });
+});
+
+describe('additional questions', () => {
+  let questions: any[];
+
+  before(async () => {
+    await db.sql`DELETE FROM rate_limits`;
+  });
+
+  test('the editor saves questions and rejects invalid ones', async () => {
+    questions = [
+      {
+        id: 'q_sportart01',
+        label: 'Welche Sportart interessiert dich?',
+        type: 'select',
+        options: ['Fußball', 'Tischtennis', 'Yoga'],
+        required: true,
+        appliesTo: 'all',
+        help: 'Mehrfachnennungen bitte im nächsten Feld.',
+      },
+      {
+        id: 'q_anmerkung1',
+        label: 'Anmerkungen',
+        type: 'textarea',
+        options: [],
+        required: false,
+        appliesTo: 'all',
+        help: '',
+      },
+      {
+        id: 'q_helfen0001',
+        label: 'Ich helfe bei Veranstaltungen mit.',
+        type: 'checkbox',
+        options: [],
+        required: false,
+        appliesTo: 'new',
+        help: '',
+      },
+    ];
+    const invalid = await saveSettings({ questions: [{ ...questions[0], options: ['nur eine'] }] });
+    assert.equal(invalid.status, 400);
+    assert.match(invalid.data.fields.questions, /mindestens zwei/);
+    const before = await pageConsent(app.base);
+    assert.equal((await saveSettings({ questions })).status, 200);
+    assert.deepEqual((await admin.json('/api/admin/settings')).data.settings.questions, questions);
+    const after = await pageConsent(app.base);
+    assert.notEqual(after.new, before.new);
+    assert.notEqual(after.existing, before.existing);
+    const page = await html('/');
+    assert.match(page.text, /Welche Sportart interessiert dich\?/);
+  });
+
+  test('a visitor with the old form is asked to reload', async () => {
+    const outdated = newApplication('0000000000000000');
+    const res = await new Client(app.base).json('/api/submissions', { json: outdated });
+    assert.equal(res.status, 409);
+    assert.equal(res.data.config.questions.length, 3);
+  });
+
+  test('answers are required, checked and stored with the question text', async () => {
+    const consent = await pageConsent(app.base);
+    const visitor = new Client(app.base);
+    const missing = await visitor.json('/api/submissions', {
+      json: newApplication(consent, { lastName: 'Fragen' }),
+    });
+    assert.equal(missing.status, 400);
+    assert.match(missing.data.error, /Welche Sportart/);
+    const wrong = await visitor.json('/api/submissions', {
+      json: newApplication(consent, { lastName: 'Fragen', answers: { q_sportart01: 'Golf' } }),
+    });
+    assert.equal(wrong.status, 400);
+
+    mail.mails.length = 0;
+    const application = newApplication(consent, {
+      lastName: 'Fragen',
+      answers: { q_sportart01: 'Yoga', q_anmerkung1: 'Gern\nabends', q_helfen0001: 'on' },
+    });
+    assert.equal((await visitor.json('/api/submissions', { json: application })).status, 201);
+    const [stored] =
+      await db.sql`SELECT answers FROM submissions WHERE id = ${application.requestId}`;
+    assert.deepEqual(stored.answers, [
+      { id: 'q_sportart01', question: 'Welche Sportart interessiert dich?', answer: 'Yoga' },
+      { id: 'q_anmerkung1', question: 'Anmerkungen', answer: 'Gern\nabends' },
+      { id: 'q_helfen0001', question: 'Ich helfe bei Veranstaltungen mit.', answer: 'Ja' },
+    ]);
+    const [club] = await mail.waitFor(1);
+    assert.match(club.text, /Zusätzliche Angaben:/);
+    assert.match(club.text, /Welche Sportart interessiert dich\?: Yoga/);
+
+    // The checkbox question is only asked on the new-member path.
+    const update = newApplication(consent, {
+      kind: 'existing',
+      statutesAccepted: undefined,
+      lastName: 'Fragen',
+      answers: { q_sportart01: 'Fußball', q_helfen0001: 'on' },
+    });
+    assert.equal((await visitor.json('/api/submissions', { json: update })).status, 201);
+    const [existing] = await db.sql`SELECT answers FROM submissions WHERE id = ${update.requestId}`;
+    assert.deepEqual(
+      existing.answers.map((a: any) => a.id),
+      ['q_sportart01', 'q_anmerkung1'],
+    );
+  });
+
+  test('renaming a question later keeps the wording the visitor answered', async () => {
+    const renamed = questions.map((q) =>
+      q.id === 'q_sportart01' ? { ...q, label: 'Sportart' } : q,
+    );
+    assert.equal((await saveSettings({ questions: renamed })).status, 200);
+    const rows = await db.sql`SELECT answers FROM submissions WHERE last_name = 'Fragen'`;
+    for (const { answers } of rows)
+      assert.equal(answers[0].question, 'Welche Sportart interessiert dich?');
+    const { data } = await admin.json('/api/admin/submissions?status=all');
+    const listed = data.rows.filter((r: any) => r.last_name === 'Fragen');
+    assert.equal(listed.length, 2);
+    assert.ok(listed.every((r: any) => r.answers.length >= 2));
+  });
+
+  test('removing all questions restores the plain form', async () => {
+    const before = await pageConsent(app.base);
+    assert.equal((await saveSettings({ questions: [] })).status, 200);
+    assert.notEqual((await pageConsent(app.base)).new, before.new);
+    assert.doesNotMatch((await html('/')).text, /Sportart/);
+    const consent = await pageConsent(app.base);
+    assert.equal(
+      (
+        await new Client(app.base).json('/api/submissions', {
+          json: newApplication(consent, { lastName: 'Ohnefragen' }),
+        })
+      ).status,
+      201,
+    );
+  });
+});
+
+describe('data export', () => {
+  test('exports all fields, answers and old records without phone or room', async () => {
+    // A record from before the migration: no phone, room or answers.
+    const oldId = crypto.randomUUID();
+    await db.sql`
+      INSERT INTO submissions (id, kind, first_name, last_name, birth_date, email,
+                               document_version, statutes_url, privacy_url)
+      VALUES (${oldId}, 'existing', 'Alt', 'Bestand', '1970-01-02', 'alt@example.org',
+              'v1', '', '/p.pdf')`;
+    // Cells that a spreadsheet could run as a formula are neutralised.
+    const consent = await pageConsent(app.base);
+    const formula = newApplication(consent, { firstName: '=HYPERLINK("x")', lastName: 'Formel' });
+    assert.equal(
+      (await new Client(app.base).json('/api/submissions', { json: formula })).status,
+      201,
+    );
+
+    const listed = (await admin.json('/api/admin/submissions?status=all')).data.rows.find(
+      (r: any) => r.id === oldId,
+    );
+    assert.equal(listed.phone, null);
+    assert.equal(listed.room, null);
+    assert.deepEqual(listed.answers, []);
+
+    const res = await admin.req('/api/admin/export?status=all');
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type')!, /^text\/csv/);
+    assert.match(res.headers.get('cache-control')!, /no-store/);
+    assert.match(
+      res.headers.get('content-disposition')!,
+      /Mitgliederportal-Export-\d{4}-\d{2}-\d{2}\.csv/,
+    );
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    assert.deepEqual([...bytes.slice(0, 3)], [0xef, 0xbb, 0xbf]);
+    const text = new TextDecoder().decode(bytes);
+    const [header, ...lines] = text.split('\r\n');
+    assert.match(
+      header,
+      /^Vorgangsnummer;Art;Status;Vorname;Nachname;Geburtsdatum;E-Mail;Telefon;Zimmernummer;Welche Sportart interessiert dich\?;Anmerkungen;/,
+    );
+    const old = lines.find((l) => l.startsWith(oldId))!;
+    assert.match(old, /;Bestehendes Mitglied;Offen;Alt;Bestand;02\.01\.1970;alt@example\.org;;;/);
+    const answered = lines.find((l) => l.includes(';Fragen;') && l.includes('Yoga'))!;
+    assert.match(answered, /;'\+49 30 1234567;B 214;Yoga;"Gern\nabends";Ja;/);
+    const neutralised = lines.find((l) => l.includes(';Formel;'))!;
+    assert.match(neutralised, /;"'=HYPERLINK\(""x""\)";Formel;/);
+
+    const pending = await admin.req('/api/admin/export?status=pending');
+    assert.equal(pending.status, 200);
+    assert.equal((await admin.json('/api/admin/export?status=bogus')).status, 400);
+    await db.sql`DELETE FROM submissions WHERE id = ${oldId} OR last_name IN ('Formel', 'Fragen', 'Ohnefragen')`;
   });
 });
 

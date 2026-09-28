@@ -68,6 +68,7 @@ export default function PortalPreview({
     open: settings.portalOpen && missingToOpen(settings).length === 0,
     unavailable: false,
     consent: { new: '', existing: '' },
+    questions: settings.questions,
   };
   return createPortal(
     <div

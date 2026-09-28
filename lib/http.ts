@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
-import { db } from './db';
 import { HttpError, SCHEMA_OUTDATED, errorCode, logError } from './errors';
+import { consume } from './rate';
 import { allowedOrigin, cookieName, rateKey, verifySession } from './security';
 
 export { HttpError };
@@ -46,14 +46,8 @@ export async function body(request: Request, maxBytes = 8192): Promise<Record<st
 }
 
 export async function limit(request: Request, scope: string, max: number) {
-  const sql = db();
-  const key = rateKey(request, scope);
-  const bucket = Math.floor(Date.now() / 3600000);
-  const rows =
-    await sql`INSERT INTO rate_limits (key,bucket,count) VALUES (${key},${bucket},1) ON CONFLICT (key,bucket) DO UPDATE SET count=rate_limits.count+1 RETURNING count`;
-  if (rows[0].count > max)
+  if (!(await consume(rateKey(request, scope), max)))
     throw new HttpError(429, 'Zu viele Versuche. Bitte versuche es in einer Stunde erneut.');
-  await sql`DELETE FROM rate_limits WHERE bucket < ${bucket - 24}`;
 }
 
 export function failure(err: unknown, scope = 'request', { adminRoute = false } = {}) {

@@ -7,6 +7,7 @@ Status: feature-complete and tested locally. What remains are the club’s own a
 - German two-step membership form with separate paths for new and existing members; receipt page; closed by default.
 - Protected admin area (`/admin`): filter, counts, review/approve/reject/reconcile, approval-gated PDF, manual e-mail draft, mark as sent, delete, pagination.
 - **Form editor (`/admin/formular`)** behind the same login: every public text (headings, explanations, checkbox wording, notices, buttons, field labels, receipt page), document links and version, club name, contact e-mail, header/footer lines, e-mail template (`{vorname}`, `{nachname}`, `{verein}`), PDF texts, and opening/closing the portal. Live preview (both paths, both steps, receipt), per-field defaults, validation messages next to the field, sample PDF, optimistic locking against concurrent edits, unsaved-changes warning, edits survive an expired session. Saved texts live in the `portal_settings` table and apply immediately; environment variables are only starting values.
+- **Update 2026-09 (see `UPDATE-2026-09.md`):** phone and room number are required on both paths; admin-defined additional questions (editor in `/admin/formular`); automatic e-mails via Resend (club notification + receipt, once per submission, retry from `/admin`, errors shown); CSV export; SQL migration in `scripts/migrations/`.
 - Each submission stores the exact confirmed checkbox wording. Visitors who confirmed outdated texts or documents are asked to confirm the new version; their entered data is kept.
 - Fixes made while finishing:
   - Neon-style connection strings (`sslmode`, `channel_binding`) used to break every query; they now work.
@@ -21,9 +22,9 @@ Status: feature-complete and tested locally. What remains are the club’s own a
 
 ## Verified
 
-- `npm test`: 25 unit tests passed (validation, sessions, origins, transitions, database URL/TLS options, text settings, PDF).
-- `npm run test:integration`: production build plus 53 full-stack tests passed:
-  - 41 HTTP/deployment tests and 12 browser tests.
+- `npm test`: 33 unit tests passed (validation incl. phone/room, sessions, origins, transitions, database URL/TLS options, text settings, questions/answers, e-mail texts, Resend configuration, PDF).
+- `npm run test:integration`: production build plus 70 full-stack tests passed:
+  - 56 HTTP/deployment tests (incl. both e-mails against a stand-in Resend server, the Neon SQL migration file, export) and 14 browser tests.
   - Run against PGlite and against a real PostgreSQL 16 over TLS with a Neon-style URL.
   - Stable over repeated runs.
   - They cover submissions, the editor, all review transitions, PDF, deletion, pagination, rate limits, logout, migration of the first-release schema, missing/unreachable databases, and log privacy.
@@ -36,6 +37,7 @@ Not verifiable here:
 
 - Vercel deployment, Neon connectivity and custom domain/TLS.
 - Behaviour of the club’s mail program with the `mailto:` draft.
+- Real delivery through Resend (domain verification, spam filters) – check with a test submission after deploying.
 - Google Chrome on macOS; the browser tests ran on Chromium 141/Linux and use the installed Chrome when you run them.
 
 ## Still to do (club/owner)

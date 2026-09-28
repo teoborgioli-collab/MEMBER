@@ -13,7 +13,8 @@ export async function GET(request: Request) {
     const offset = Math.max(0, Math.min(100000, Math.floor(Number(p.get('offset'))) || 0));
     const sql = db();
     const rows = await sql`
-      SELECT id, kind, first_name, last_name, birth_date::text AS birth_date, email, status,
+      SELECT id, kind, first_name, last_name, birth_date::text AS birth_date, email, phone, room,
+             answers, club_notified_at, confirmation_sent_at, mail_error, approval_mail_error, status,
              document_version, statutes_url, privacy_url, acknowledgements,
              created_at, decided_at, sent_at
       FROM submissions

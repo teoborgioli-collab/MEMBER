@@ -1,6 +1,12 @@
 'use client';
 import { useRef, useState } from 'react';
-import { UNAVAILABLE_NOTICE, type FormConfig } from '../lib/form-settings';
+import {
+  QUESTION_LIMITS,
+  UNAVAILABLE_NOTICE,
+  questionsFor,
+  type FormConfig,
+  type Question,
+} from '../lib/form-settings';
 
 type Kind = 'new' | 'existing';
 
@@ -45,7 +51,12 @@ export default function MembershipForm({
     if (!config.open || busy) return;
     setError('');
     setBusy(true);
-    const data = Object.fromEntries(new FormData(e.currentTarget));
+    const formData = new FormData(e.currentTarget);
+    const answers: Record<string, string | boolean> = {};
+    for (const q of questionsFor(config.questions, kind))
+      answers[q.id] =
+        q.type === 'checkbox' ? formData.has('q:' + q.id) : String(formData.get('q:' + q.id) ?? '');
+    const data = Object.fromEntries([...formData].filter(([key]) => !key.startsWith('q:')));
     // Reused for retries of unchanged data, so a lost response cannot create a duplicate.
     requestId.current ||= crypto.randomUUID();
     try {
@@ -56,6 +67,7 @@ export default function MembershipForm({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             ...data,
+            answers,
             kind,
             requestId: requestId.current,
             consent: config.consent[kind],
@@ -213,7 +225,30 @@ export default function MembershipForm({
                 placeholder={t.emailPlaceholder || undefined}
               />
             </label>
+            <label>
+              {t.labelPhone}
+              <input
+                name="phone"
+                type="tel"
+                autoComplete="tel"
+                required
+                maxLength={30}
+                pattern="\+?[0-9\(][0-9 \(\)\/.\-]{4,}"
+                title="Bitte eine Telefonnummer mit mindestens 6 Ziffern angeben."
+              />
+            </label>
+            <label>
+              {t.labelRoom}
+              <input name="room" required maxLength={20} autoComplete="off" />
+            </label>
           </div>
+          {questionsFor(config.questions, kind).length > 0 && (
+            <div className="questions">
+              {questionsFor(config.questions, kind).map((q) => (
+                <QuestionField key={q.id} question={q} />
+              ))}
+            </div>
+          )}
           {t.fieldHint ? <p className="field-hint pre">{t.fieldHint}</p> : <div className="gap" />}
           <button
             type="button"
@@ -297,5 +332,48 @@ export default function MembershipForm({
         </p>
       )}
     </section>
+  );
+}
+
+function QuestionField({ question: q }: { question: Question }) {
+  const name = 'q:' + q.id;
+  const hint = q.help ? <small className="question-help">{q.help}</small> : null;
+  if (q.type === 'checkbox')
+    return (
+      <label className="check">
+        <input type="checkbox" name={name} required={q.required} />
+        <span>
+          {q.label}
+          {hint}
+        </span>
+      </label>
+    );
+  return (
+    <label className="question">
+      <span>
+        {q.label}
+        {!q.required && <span className="optional"> (optional)</span>}
+      </span>
+      {q.type === 'select' ? (
+        <select name={name} required={q.required} defaultValue="">
+          <option value="" disabled={q.required}>
+            Bitte wählen …
+          </option>
+          {q.options.map((option) => (
+            <option key={option}>{option}</option>
+          ))}
+        </select>
+      ) : q.type === 'textarea' ? (
+        <textarea
+          name={name}
+          required={q.required}
+          rows={3}
+          maxLength={QUESTION_LIMITS.longAnswer}
+        />
+      ) : (
+        <input name={name} required={q.required} maxLength={QUESTION_LIMITS.answer} />
+      )}
+      {hint}
+    </label>
   );
 }

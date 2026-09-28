@@ -113,6 +113,8 @@ async function fillPersonalData(page: Page, first = 'Jürgen', last = 'Öztürk'
     .replace(/[^A-Za-z]/g, '')
     .toLowerCase();
   await page.getByLabel('E-Mail-Adresse').fill(`${ascii}@example.org`);
+  await page.getByLabel('Telefonnummer').fill('030 1234567');
+  await page.getByLabel('Zimmernummer').fill('B 214');
 }
 
 async function login(page: Page, route = '/admin') {
@@ -134,6 +136,20 @@ describe('public form', () => {
     await page.getByRole('button', { name: /Weiter zu den Hinweisen/ }).click();
     await assert.doesNotReject(page.getByText('Schritt 1 von 2').waitFor());
     await fillPersonalData(page);
+    // Phone and room number are required, and the phone number must look like one.
+    await page.getByLabel('Telefonnummer').fill('');
+    await page.getByRole('button', { name: /Weiter zu den Hinweisen/ }).click();
+    assert.equal(await page.getByText('Schritt 1 von 2').count(), 1);
+    await page.getByLabel('Telefonnummer').fill('keine');
+    assert.equal(
+      await page.getByLabel('Telefonnummer').evaluate((el: HTMLInputElement) => el.validity.valid),
+      false,
+    );
+    await page.getByLabel('Telefonnummer').fill('+49 (0)30 123-4567');
+    await page.getByLabel('Zimmernummer').fill('');
+    await page.getByRole('button', { name: /Weiter zu den Hinweisen/ }).click();
+    assert.equal(await page.getByText('Schritt 1 von 2').count(), 1);
+    await page.getByLabel('Zimmernummer').fill('B 214');
     await page.getByRole('button', { name: /Weiter zu den Hinweisen/ }).click();
     await page.getByText('Schritt 2 von 2').waitFor();
     assert.equal(
@@ -152,10 +168,11 @@ describe('public form', () => {
     assert.match(await page.locator('.reference').innerText(), /^[0-9a-f-]{36}$/);
     await page.getByText(/noch nicht angenommen/).waitFor();
     await shot(page, 'phone-3-received');
-    const rows = await db.sql`SELECT first_name, kind FROM submissions WHERE last_name = 'Öztürk'`;
+    const rows =
+      await db.sql`SELECT first_name, kind, phone, room FROM submissions WHERE last_name = 'Öztürk'`;
     assert.deepEqual(
       rows.map((r) => ({ ...r })),
-      [{ first_name: 'Jürgen', kind: 'new' }],
+      [{ first_name: 'Jürgen', kind: 'new', phone: '+49 (0)30 123-4567', room: 'B 214' }],
     );
     await context.close();
   });
@@ -247,6 +264,82 @@ describe('form editor', () => {
     await page.getByText('Alles gespeichert').waitFor();
     await visitor.reload();
     await visitor.getByRole('heading', { name: 'Schön, dass Sie da sind!' }).waitFor();
+    await context.close();
+  });
+
+  it('add, reorder and remove additional questions; visitors answer them', async () => {
+    const { context, page } = await open();
+    await login(page, '/admin/formular');
+    await page.getByText('Formular · Schritt 1').click();
+    await page.getByRole('button', { name: '+ Frage hinzufügen' }).click();
+    const first = page.locator('fieldset.question-card').nth(0);
+    await first.getByLabel('Fragetext').fill('Welche Sportart interessiert dich?');
+    await first.getByLabel('Antwortart').selectOption('select');
+    await first.getByLabel(/Auswahlmöglichkeiten/).fill('Fußball\nTischtennis\nYoga');
+    await first.getByLabel('Pflichtfrage').check();
+    await page.getByRole('button', { name: '+ Frage hinzufügen' }).click();
+    const second = page.locator('fieldset.question-card').nth(1);
+    await second.getByLabel('Fragetext').fill('Ich helfe bei Festen mit.');
+    await second.getByLabel('Antwortart').selectOption('checkbox');
+    await second.getByLabel('Gilt für').selectOption('new');
+    await page.getByRole('button', { name: 'Frage 2 nach oben' }).click();
+    assert.equal(
+      await page.locator('fieldset.question-card').nth(0).getByLabel('Fragetext').inputValue(),
+      'Ich helfe bei Festen mit.',
+    );
+    // A selection list needs two options.
+    await page.getByRole('button', { name: '+ Frage hinzufügen' }).click();
+    const third = page.locator('fieldset.question-card').nth(2);
+    await third.getByLabel('Fragetext').fill('Unvollständig');
+    await third.getByLabel('Antwortart').selectOption('select');
+    await page.getByRole('button', { name: 'Speichern', exact: true }).click();
+    await page.getByText(/Frage 3: Bitte mindestens zwei Auswahlmöglichkeiten/).waitFor();
+    await shot(page, 'desktop-5a-questions-editor');
+    await third.getByRole('button', { name: 'Entfernen' }).click();
+    assert.equal(await page.locator('fieldset.question-card').count(), 2);
+    await page.getByRole('button', { name: 'Speichern', exact: true }).click();
+    await page.getByText('Gespeichert. Die Änderungen sind jetzt online.').waitFor();
+
+    const visitor = await context.newPage();
+    watch(visitor);
+    await visitor.goto(app.base + '/');
+    await fillPersonalData(visitor, 'Frida', 'Fragen');
+    await visitor.getByLabel('Ich helfe bei Festen mit.').check();
+    await visitor.getByRole('button', { name: /Weiter zu den Hinweisen/ }).click();
+    assert.equal(await visitor.getByText('Schritt 1 von 2').count(), 1, 'required question');
+    await visitor.getByLabel(/Welche Sportart/).selectOption('Yoga');
+    await shot(visitor, 'desktop-5b-questions-form');
+    await visitor.getByRole('button', { name: /Weiter zu den Hinweisen/ }).click();
+    await visitor.getByLabel(/Satzung gelesen/).check();
+    await visitor.getByLabel(/Datenschutzhinweise/).check();
+    await visitor.getByLabel(/richtig und aktuell/).check();
+    await visitor.getByRole('button', { name: /Antrag absenden/ }).click();
+    await visitor.getByText('Dein Antrag ist eingegangen.').waitFor();
+    const [row] = await db.sql`SELECT answers FROM submissions WHERE last_name = 'Fragen'`;
+    assert.deepEqual(
+      row.answers.map((a: any) => [a.question, a.answer]),
+      [
+        ['Ich helfe bei Festen mit.', 'Ja'],
+        ['Welche Sportart interessiert dich?', 'Yoga'],
+      ],
+    );
+    // Existing members only see the questions meant for them.
+    await visitor.goto(app.base + '/');
+    await visitor.getByText('Ich bin schon Mitglied').click();
+    await visitor.getByLabel(/Welche Sportart/).waitFor();
+    assert.equal(await visitor.getByLabel('Ich helfe bei Festen mit.').count(), 0);
+
+    // Removing the questions again.
+    for (let i = 0; i < 2; i++)
+      await page
+        .locator('fieldset.question-card')
+        .first()
+        .getByRole('button', { name: 'Entfernen' })
+        .click();
+    await page.getByRole('button', { name: 'Speichern', exact: true }).click();
+    await page.getByText('Gespeichert. Die Änderungen sind jetzt online.').waitFor();
+    await visitor.goto(app.base + '/');
+    assert.equal(await visitor.getByLabel(/Welche Sportart/).count(), 0);
     await context.close();
   });
 
@@ -350,6 +443,16 @@ describe('processing submissions', () => {
     const record = page.locator('details.record', { hasText: 'Jürgen Öztürk' });
     await record.locator('summary').click();
     await record.getByText('Bestätigte Hinweise').waitFor();
+    await record.getByRole('link', { name: '+49 (0)30 123-4567' }).waitFor();
+    assert.equal(
+      await record.getByRole('link', { name: '+49 (0)30 123-4567' }).getAttribute('href'),
+      'tel:+49301234567',
+    );
+    await record.getByText('B 214').waitFor();
+    // Without RESEND_API_KEY (as in this test) the e-mails fail and can be sent again later.
+    await record.getByText(/RESEND_API_KEY ist in Vercel nicht gesetzt/).waitFor();
+    await record.getByRole('button', { name: 'E-Mails erneut senden' }).click();
+    await page.getByText(/E-Mail-Versand fehlgeschlagen/).waitFor();
     await shot(page, 'desktop-6-pending');
     await record.getByRole('button', { name: 'Aufnahme bestätigen' }).click();
     await page.getByText(/Aufnahme bestätigt\./).waitFor();
@@ -384,6 +487,26 @@ describe('processing submissions', () => {
         (await page.locator('details.record', { hasText: 'Jürgen Öztürk' }).count()) === 0,
       'the deleted record disappears from the list',
     );
+    await context.close();
+  });
+
+  it('exports the list as CSV with phone, room and answers', async () => {
+    const { context, page } = await open();
+    await login(page);
+    await page
+      .getByRole('button', { name: 'Zu „Alle“ wechseln' })
+      .click()
+      .catch(() => {});
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Export (CSV)' }).click(),
+    ]);
+    assert.match(download.suggestedFilename(), /\.csv$/);
+    const file = path.join(OUT, 'Export.csv');
+    await download.saveAs(file);
+    const text = (await readFile(file, 'utf8')).replace(/^\uFEFF/, '');
+    assert.match(text.split('\r\n')[0], /;Telefon;Zimmernummer;/);
+    assert.match(text, /;Anna;Schmidt;17\.05\.1990;anna@example\.org;030 1234567;B 214;/);
     await context.close();
   });
 

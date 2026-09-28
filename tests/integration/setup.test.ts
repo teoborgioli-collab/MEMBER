@@ -1,4 +1,5 @@
 // Deployment scenarios: migrations, environment defaults, missing or unreachable databases.
+import { readFile } from 'node:fs/promises';
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -10,6 +11,8 @@ import {
   pageConsent,
   startApp,
   startDatabase,
+  startMailServer,
+  sleep,
   visiblePage,
   type App,
   type Db,
@@ -84,6 +87,138 @@ test('the migration upgrades the first release and can run repeatedly', async ()
     tables.map((t) => t.table_name),
     ['portal_settings', 'rate_limits', 'submissions'],
   );
+});
+
+const NEW_COLUMNS = [
+  'phone',
+  'room',
+  'answers',
+  'club_notified_at',
+  'confirmation_sent_at',
+  'mail_error',
+];
+
+test('the SQL migration for Neon adds the new fields without touching existing data', async () => {
+  const db = await database();
+  await migrate(db);
+  // The state before this update: none of the new columns yet, one stored record.
+  await db.sql.unsafe(
+    'ALTER TABLE submissions ' + NEW_COLUMNS.map((c) => `DROP COLUMN ${c}`).join(', '),
+  );
+  const id = crypto.randomUUID();
+  await db.sql`
+    INSERT INTO submissions (id, kind, first_name, last_name, birth_date, email,
+                             document_version, statutes_url, privacy_url, status, decided_at)
+    VALUES (${id}, 'new', 'Alt', 'Bestand', '1970-01-01', 'alt@example.org', 'v1', '/s.pdf',
+            '/p.pdf', 'approved', now())`;
+  await db.sql`INSERT INTO portal_settings (id, data, revision)
+               VALUES (1, ${db.sql.json({ clubName: 'Mein Verein' })}, 7)`;
+  const file = await readFile(
+    'scripts/migrations/2026-09-29-telefon-zimmer-fragen-emails.sql',
+    'utf8',
+  );
+  // Run exactly as pasted into the Neon SQL editor (one session, own BEGIN/COMMIT), twice.
+  const session = await db.sql.reserve();
+  await session.unsafe(file);
+  await session.unsafe(file);
+  session.release();
+  assert.match(await migrate(db), /Database tables ready/);
+
+  const columns = await db.sql`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = current_schema() AND table_name = 'submissions'`;
+  for (const c of NEW_COLUMNS)
+    assert.ok(
+      columns.some((r) => r.column_name === c),
+      c,
+    );
+  const [row] = await db.sql`
+    SELECT first_name, status, phone, room, answers, club_notified_at, mail_error
+    FROM submissions WHERE id = ${id}`;
+  assert.deepEqual(
+    { ...row },
+    {
+      first_name: 'Alt',
+      status: 'approved',
+      phone: null,
+      room: null,
+      answers: [],
+      club_notified_at: null,
+      mail_error: null,
+    },
+  );
+  const [settings] = await db.sql`SELECT data, revision FROM portal_settings`;
+  assert.equal(settings.data.clubName, 'Mein Verein');
+  assert.equal(settings.revision, 7);
+
+  // The old record still works in the admin area, including its PDF.
+  const server = await app(db, { ...envFor(COMPLETE) });
+  const admin = await new Client(server.base).login();
+  const list = await admin.json('/api/admin/submissions?status=all');
+  assert.equal(list.status, 200);
+  assert.equal(list.data.rows[0].phone, null);
+  const pdf = await admin.req(`/api/admin/submissions/${id}/pdf`);
+  assert.equal(pdf.status, 200);
+  const csv = await admin.req('/api/admin/export');
+  assert.equal(csv.status, 200);
+  assert.match(await csv.text(), /Alt;Bestand;01\.01\.1970;alt@example\.org;;;/);
+});
+
+test('without the new columns submissions fail clearly instead of losing data', async () => {
+  const db = await database();
+  await migrate(db);
+  await db.sql.unsafe('ALTER TABLE submissions DROP COLUMN phone');
+  const server = await app(db, { ...envFor(COMPLETE), PORTAL_OPEN: 'true' });
+  const consent = await pageConsent(server.base);
+  const res = await new Client(server.base).json('/api/submissions', {
+    json: newApplication(consent),
+  });
+  assert.equal(res.status, 503);
+  assert.equal((await db.sql`SELECT count(*)::int AS n FROM submissions`)[0].n, 0);
+});
+
+test('without RESEND_API_KEY submissions are stored and the missing key is shown', async () => {
+  const db = await database();
+  await migrate(db);
+  const server = await app(db, { ...envFor(COMPLETE), PORTAL_OPEN: 'true' });
+  const consent = await pageConsent(server.base);
+  const application = newApplication(consent);
+  const res = await new Client(server.base).json('/api/submissions', { json: application });
+  assert.equal(res.status, 201);
+  const admin = await new Client(server.base).login();
+  let row: any;
+  for (let i = 0; i < 100 && !row?.mail_error; i++) {
+    await sleep(50);
+    row = (await admin.json('/api/admin/submissions?status=all')).data.rows[0];
+  }
+  assert.equal(row.id, application.requestId);
+  assert.equal(row.mail_error, 'verein:NO_API_KEY bestaetigung:NO_API_KEY');
+  const retry = await admin.json('/api/admin/submissions/' + row.id, { json: { action: 'mails' } });
+  assert.equal(retry.status, 502);
+  assert.match(retry.data.error, /RESEND_API_KEY ist in Vercel nicht gesetzt/);
+  assert.doesNotMatch(server.logs(), /Öztürk|example\.org/);
+});
+
+test('sender and club inbox can be changed with environment variables', async () => {
+  const db = await database();
+  await migrate(db);
+  const mail = await startMailServer();
+  cleanup.push(mail.stop);
+  const server = await app(db, {
+    ...envFor(COMPLETE),
+    PORTAL_OPEN: 'true',
+    RESEND_API_KEY: 're_other',
+    RESEND_API_URL: mail.url,
+    MAIL_FROM: 'Vorstand <vorstand@example.org>',
+    CLUB_NOTIFY_EMAIL: 'vorstand@example.org',
+  });
+  const consent = await pageConsent(server.base);
+  await new Client(server.base).json('/api/submissions', { json: newApplication(consent) });
+  const [club, receipt] = await mail.waitFor(2);
+  assert.equal(club.from, 'Vorstand <vorstand@example.org>');
+  assert.deepEqual(club.to, ['vorstand@example.org']);
+  assert.equal(receipt.reply_to, 'vorstand@example.org');
+  assert.match(receipt.subject, new RegExp(COMPLETE.clubName.replace(/\./g, '\\.') + '$'));
 });
 
 test('environment variables configure the portal until texts are saved', async () => {

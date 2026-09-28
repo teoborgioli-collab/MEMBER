@@ -1,12 +1,12 @@
 'use client';
-import { useEffect, useState } from 'react';
-import { fillTemplate } from '../../lib/form-settings';
+import { Fragment, useEffect, useState } from 'react';
+import { mailErrorMessage } from '../../lib/mail';
 import type { Status, Submission } from '../../lib/validation';
 import { api, ApiError, dateTime, download } from './api';
 
 type Filter = Status | 'all';
 type Mail = { clubName: string; subject: string; body: string };
-type Action = 'approve' | 'review' | 'reject' | 'sent' | 'delete';
+type Action = 'approve' | 'review' | 'reject' | 'sent' | 'delete' | 'mails' | 'send_approval';
 
 const LABELS: Record<Status, string> = {
   pending: 'Offen',
@@ -25,18 +25,22 @@ const QUESTIONS: Record<Action, string> = {
     'Aufnahme ist nach der Satzung beschlossen und notwendige Zustimmungen (z. B. bei Minderjährigen) liegen vor?',
   review: 'Identität geprüft und Daten mit dem Mitgliederverzeichnis abgeglichen?',
   sent: 'Hast du die Bestätigung mit dem PDF-Anhang tatsächlich versendet?',
+  send_approval: 'Die Mitgliedsbestätigung mit PDF jetzt automatisch an das Mitglied senden?',
   reject: 'Diesen Antrag ablehnen? Die Person wird dadurch nicht automatisch benachrichtigt.',
+  mails: 'Die noch nicht versendeten automatischen E-Mails jetzt erneut senden?',
 };
 
 const DONE: Record<Action, { text: string; filter?: Filter }> = {
   approve: {
-    text: 'Aufnahme bestätigt. Unter „Angenommen“ kannst du jetzt das PDF herunterladen und die E-Mail vorbereiten.',
+    text: 'Aufnahme gespeichert. Die Mitgliedsbestätigung mit PDF wurde automatisch versendet, sofern der Maildienst erreichbar war.',
     filter: 'approved',
   },
   review: { text: 'Als abgeglichen markiert.', filter: 'reviewed' },
   reject: { text: 'Abgelehnt. Die Person wird nicht automatisch benachrichtigt.' },
   sent: { text: 'Versand vermerkt.' },
   delete: { text: 'Eintrag gelöscht.' },
+  mails: { text: 'Automatische E-Mails versendet.' },
+  send_approval: { text: 'Mitgliedsbestätigung mit PDF versendet.' },
 };
 
 const day = (value: string) =>
@@ -47,9 +51,11 @@ const day = (value: string) =>
     year: 'numeric',
   });
 const birthDay = (value: string) => value.split('-').reverse().join('.');
-// Keep "@" readable for mail programs; encode everything else.
+// Encode addresses for mailto links.
 const mailAddress = (email: string) => email.split('@').map(encodeURIComponent).join('@');
-const mailText = (text: string) => encodeURIComponent(text.replace(/\r?\n/g, '\r\n'));
+
+// "+49 (0)30 …" is dialled without the (0).
+const telLink = (phone: string) => phone.replace(/^(\+\d+)\s*\(0\)/, '$1').replace(/[^+0-9]/g, '');
 
 export default function Submissions({
   session,
@@ -101,12 +107,13 @@ export default function Submissions({
     setError('');
     setNotice(null);
     try {
-      await api('/api/admin/submissions/' + row.id, {
+      const result = await api<{ok: boolean; warning?: string}>('/api/admin/submissions/' + row.id, {
         method: 'POST',
         json: { action, confirm: action === 'delete' ? row.id : undefined },
       });
       await load();
-      setNotice(DONE[action]);
+      if (result.warning) setError(result.warning);
+      else setNotice(DONE[action]);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) onExpired();
       setError(err instanceof Error ? err.message : 'Aktion fehlgeschlagen.');
@@ -128,21 +135,19 @@ export default function Submissions({
     }
   }
 
-  function emailDraft(row: Submission) {
-    const values = {
-      vorname: row.first_name,
-      nachname: row.last_name,
-      verein: mail.clubName || 'Unser Verein',
-    };
-    return (
-      'mailto:' +
-      mailAddress(row.email) +
-      '?subject=' +
-      mailText(fillTemplate(mail.subject, values)) +
-      '&body=' +
-      mailText(fillTemplate(mail.body, values))
-    );
+  async function exportCsv() {
+    setWorking('export');
+    setError('');
+    try {
+      await download(`/api/admin/export?status=${filter}`, 'Mitgliederportal-Export.csv');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) onExpired();
+      setError(err instanceof Error ? err.message : 'Export fehlgeschlagen.');
+    } finally {
+      setWorking('');
+    }
   }
+
 
   const total = Object.values(counts).reduce((sum, n) => sum + (n ?? 0), 0);
   return (
@@ -169,6 +174,9 @@ export default function Submissions({
         ))}
         <button onClick={() => load()} disabled={loading || !!working}>
           Aktualisieren
+        </button>
+        <button onClick={exportCsv} disabled={loading || !!working}>
+          {working === 'export' ? 'Export läuft …' : 'Export (CSV)'}
         </button>
       </div>
       {notice && (
@@ -221,6 +229,22 @@ export default function Submissions({
             </dd>
             <dt>Geburtsdatum</dt>
             <dd>{birthDay(row.birth_date)}</dd>
+            <dt>Telefon</dt>
+            <dd>
+              {row.phone ? (
+                <a href={'tel:' + telLink(row.phone)}>{row.phone}</a>
+              ) : (
+                <span className="muted">nicht angegeben</span>
+              )}
+            </dd>
+            <dt>Zimmernummer</dt>
+            <dd>{row.room || <span className="muted">nicht angegeben</span>}</dd>
+            {row.answers?.map((a) => (
+              <Fragment key={a.id}>
+                <dt>{a.question}</dt>
+                <dd className="pre">{a.answer || <span className="muted">–</span>}</dd>
+              </Fragment>
+            ))}
             <dt>Eingegangen</dt>
             <dd>{dateTime(row.created_at)}</dd>
             <dt>Vorgangsnummer</dt>
@@ -260,14 +284,41 @@ export default function Submissions({
                 <dd>{dateTime(row.sent_at)}</dd>
               </>
             )}
+            <dt>Automatische E-Mails</dt>
+            <dd>
+              An den Verein:{' '}
+              {row.club_notified_at ? (
+                dateTime(row.club_notified_at)
+              ) : (
+                <strong>nicht versendet</strong>
+              )}
+              <br />
+              Eingangsbestätigung:{' '}
+              {row.confirmation_sent_at ? (
+                dateTime(row.confirmation_sent_at)
+              ) : (
+                <strong>nicht versendet</strong>
+              )}
+              {row.mail_error && (
+                <span className="mail-failed" title={row.mail_error}>
+                  <br />
+                  Fehler: {mailErrorMessage(row.mail_error)}
+                </span>
+              )}
+              {row.kind === 'new' && row.status === 'approved' && (<>
+                <br />
+                Mitgliedsbestätigung mit PDF: {row.sent_at ? dateTime(row.sent_at) : <strong>noch nicht versendet</strong>}
+                {row.approval_mail_error && <span className="mail-failed"><br />Fehler: {mailErrorMessage(row.approval_mail_error)}</span>}
+              </>)}
+            </dd>
           </dl>
           {row.status === 'approved' && (
             <div className="notice">
               <strong>Bestätigung versenden</strong>
               <br />
-              1. PDF herunterladen. 2. E-Mail-Entwurf öffnen und das PDF selbst anhängen. 3. Aus dem
-              Vereinspostfach senden. 4. Versand hier vermerken. Der Entwurf wird nicht automatisch
-              versendet.
+              Nach der Aufnahme wird die Bestätigung automatisch per E-Mail mit PDF versendet.
+              Falls der Versand fehlschlägt, kannst du ihn unten erneut auslösen. Optional kannst du
+              das PDF für eigene Unterlagen herunterladen.
             </div>
           )}
           <div className="actions">
@@ -294,17 +345,22 @@ export default function Submissions({
                 <button className="button" disabled={!!working} onClick={() => downloadPdf(row)}>
                   {working === row.id + ':pdf' ? 'PDF wird erstellt …' : 'PDF herunterladen'}
                 </button>
-                <a className="button secondary" href={emailDraft(row)}>
-                  E-Mail-Entwurf öffnen
-                </a>
-                <button
-                  className="button secondary"
-                  disabled={!!working || !!row.sent_at}
-                  onClick={() => act(row, 'sent')}
-                >
-                  {row.sent_at ? 'Versand vermerkt' : 'Als versendet markieren'}
-                </button>
+                {!row.sent_at && (
+                  <button className="button secondary" disabled={!!working}
+                    onClick={() => act(row, 'send_approval')}>
+                    Bestätigung mit PDF {row.approval_mail_error ? 'erneut ' : ''}senden
+                  </button>
+                )}
               </>
+            )}
+            {(!row.club_notified_at || !row.confirmation_sent_at) && (
+              <button
+                className="button secondary"
+                disabled={!!working}
+                onClick={() => act(row, 'mails')}
+              >
+                E-Mails erneut senden
+              </button>
             )}
             <button
               className="button danger"

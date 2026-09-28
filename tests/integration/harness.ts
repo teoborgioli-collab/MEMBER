@@ -7,6 +7,7 @@
 import { spawn } from 'node:child_process';
 import { randomBytes, scryptSync } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer, type AddressInfo } from 'node:net';
 import path from 'node:path';
 import postgres from 'postgres';
@@ -73,6 +74,7 @@ export async function startDatabase(): Promise<Db> {
     };
   }
   const pglite = await PGlite.create();
+  serializeClients(pglite);
   const port = await freePort();
   const server = new PGLiteSocketServer({
     db: pglite,
@@ -93,6 +95,28 @@ export async function startDatabase(): Promise<Db> {
       await server.stop();
       await pglite.close();
     },
+  };
+}
+
+/**
+ * PGlite has a single session, and the socket server only keeps a client's queries together
+ * inside a transaction. With the extended protocol (Parse/Bind/Execute … Sync) a query from a
+ * second client could land between those messages. Treating an unfinished sequence like an open
+ * transaction keeps each query of the test and the app (which sends e-mails in the background)
+ * together. Test infrastructure only – a real Postgres server has separate sessions.
+ */
+function serializeClients(pglite: PGlite) {
+  const EXTENDED = new Set([0x50, 0x42, 0x44, 0x45, 0x43, 0x48]); // P B D E C H
+  let unfinished = false;
+  const exec = pglite.execProtocolRawStream.bind(pglite);
+  const inTransaction = pglite.isInTransaction.bind(pglite);
+  pglite.execProtocolRawStream = (async (message: Uint8Array, options: never) => {
+    unfinished = EXTENDED.has(message[0]);
+    return exec(message, options);
+  }) as typeof pglite.execProtocolRawStream;
+  pglite.isInTransaction = () => {
+    if (pglite.closed) return false; // late messages while the test database shuts down
+    return unfinished || inTransaction();
   };
 }
 
@@ -154,6 +178,10 @@ export async function startApp(db: Db | null, env: Record<string, string> = {}):
     IMPRINT_URL: '',
     DOCUMENT_VERSION: '',
     PORTAL_OPEN: 'false',
+    RESEND_API_KEY: '',
+    RESEND_API_URL: '',
+    MAIL_FROM: '',
+    CLUB_NOTIFY_EMAIL: '',
     VERCEL: '',
     NEXT_TELEMETRY_DISABLED: '1',
     ...env,
@@ -293,6 +321,8 @@ export function newApplication(consent: Consent | string, overrides: Record<stri
     lastName: 'Öztürk',
     birthDate: '1990-05-17',
     email: 'juergen.oeztuerk@example.org',
+    phone: '+49 30 1234567',
+    room: 'B 214',
     statutesAccepted: 'on',
     privacyRead: 'on',
     accuracyConfirmed: 'on',
@@ -312,3 +342,68 @@ export const COMPLETE = {
 };
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export type SentMail = {
+  from: string;
+  to: string[];
+  subject: string;
+  text: string;
+  reply_to?: string;
+  headers?: Record<string, string>;
+  idempotencyKey: string;
+  authorization: string;
+};
+
+/**
+ * A stand-in for the Resend API (POST /emails). Like Resend, a repeated Idempotency-Key is
+ * answered with the first result and not delivered again. `failWith` makes it reject requests.
+ */
+export async function startMailServer() {
+  const mails: SentMail[] = [];
+  const seen = new Map<string, string>();
+  const state = { requests: 0, failWith: 0, delayMs: 0 };
+  const server = createHttpServer((req, res) => {
+    let raw = '';
+    req.on('data', (d) => (raw += d));
+    req.on('end', async () => {
+      state.requests++;
+      if (state.delayMs) await sleep(state.delayMs);
+      const reply = (status: number, body: unknown) => {
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(body));
+      };
+      if (req.method !== 'POST' || req.url !== '/emails') return reply(404, {});
+      if (state.failWith)
+        return reply(state.failWith, { name: 'validation_error', message: 'rejected' });
+      const key = String(req.headers['idempotency-key'] ?? '');
+      if (key && seen.has(key)) return reply(200, { id: seen.get(key) });
+      const id = crypto.randomUUID();
+      if (key) seen.set(key, id);
+      mails.push({
+        ...JSON.parse(raw),
+        idempotencyKey: key,
+        authorization: String(req.headers.authorization ?? ''),
+      });
+      reply(200, { id });
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    mails,
+    state,
+    /** Waits until at least `count` mails were delivered. */
+    async waitFor(count: number, timeoutMs = 10_000) {
+      const deadline = Date.now() + timeoutMs;
+      while (mails.length < count) {
+        if (Date.now() > deadline) throw new Error(`Expected ${count} mails, got ${mails.length}`);
+        await sleep(50);
+      }
+      return mails;
+    },
+    stop: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+export type MailServer = Awaited<ReturnType<typeof startMailServer>>;

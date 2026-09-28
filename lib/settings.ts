@@ -8,6 +8,9 @@ import {
   TEXT_KEYS,
   formTexts,
   missingToOpen,
+  QUESTION_LIMITS,
+  questionsFor,
+  type Question,
   unknownPlaceholders,
   type FormConfig,
   type Settings,
@@ -139,7 +142,100 @@ export function defaultSettings(env: Record<string, string | undefined> = proces
     }
     texts[key] = error ? FIELDS[key].value : value;
   }
-  return { ...texts, portalOpen: env.PORTAL_OPEN?.trim() === 'true' };
+  return { ...texts, portalOpen: env.PORTAL_OPEN?.trim() === 'true', questions: [] };
+}
+
+const QUESTION_ID = /^q_[0-9a-z]{6,24}$/;
+const cleanLine = (v: unknown) =>
+  typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : undefined;
+const badChars = (v: string) => CONTROL_CHARS.test(v) || BIDI_CONTROLS.test(v);
+
+/** Validates the admin-defined questions; returns them normalised or a German error. */
+export function checkQuestions(raw: unknown): { questions: Question[]; error?: string } {
+  if (raw === undefined) return { questions: [] };
+  if (!Array.isArray(raw)) return { questions: [], error: 'Ungültige Fragen.' };
+  const L = QUESTION_LIMITS;
+  if (raw.length > L.count) return { questions: [], error: `Höchstens ${L.count} Fragen.` };
+  const questions: Question[] = [];
+  const ids = new Set<string>();
+  for (const [index, item] of raw.entries()) {
+    const n = `Frage ${index + 1}`;
+    const q = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+    const id = typeof q.id === 'string' ? q.id : '';
+    if (!QUESTION_ID.test(id) || ids.has(id))
+      return { questions: [], error: `${n}: ungültige Kennung.` };
+    ids.add(id);
+    const label = cleanLine(q.label) ?? '';
+    if (!label) return { questions: [], error: `${n}: Bitte einen Fragetext eingeben.` };
+    if (label.length > L.label)
+      return { questions: [], error: `${n}: Fragetext höchstens ${L.label} Zeichen.` };
+    const help = cleanLine(q.help ?? '') ?? '';
+    if (help.length > L.help)
+      return { questions: [], error: `${n}: Hinweis höchstens ${L.help} Zeichen.` };
+    if (badChars(label) || badChars(help))
+      return { questions: [], error: `${n}: enthält unzulässige Steuerzeichen.` };
+    const type = q.type;
+    if (type !== 'text' && type !== 'textarea' && type !== 'select' && type !== 'checkbox')
+      return { questions: [], error: `${n}: unbekannter Fragetyp.` };
+    const appliesTo = q.appliesTo ?? 'all';
+    if (appliesTo !== 'all' && appliesTo !== 'new' && appliesTo !== 'existing')
+      return { questions: [], error: `${n}: ungültige Zielgruppe.` };
+    let options: string[] = [];
+    if (type === 'select') {
+      if (!Array.isArray(q.options))
+        return { questions: [], error: `${n}: Bitte Auswahlmöglichkeiten angeben.` };
+      options = [...new Set(q.options.map(cleanLine).filter((o): o is string => Boolean(o)))];
+      if (options.length < 2)
+        return {
+          questions: [],
+          error: `${n}: Bitte mindestens zwei Auswahlmöglichkeiten angeben (eine pro Zeile).`,
+        };
+      if (options.length > L.options)
+        return { questions: [], error: `${n}: höchstens ${L.options} Auswahlmöglichkeiten.` };
+      if (options.some((o) => o.length > L.option || badChars(o)))
+        return {
+          questions: [],
+          error: `${n}: Auswahlmöglichkeiten höchstens ${L.option} Zeichen.`,
+        };
+    }
+    questions.push({ id, label, type, required: q.required === true, options, appliesTo, help });
+  }
+  return { questions };
+}
+
+export type Answer = { id: string; question: string; answer: string };
+
+/** Checks a visitor's answers against the current questions for their path. */
+export function checkAnswers(
+  questions: Question[],
+  kind: 'new' | 'existing',
+  raw: unknown,
+): { answers: Answer[]; error?: string } {
+  const given =
+    raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const answers: Answer[] = [];
+  for (const q of questionsFor(questions, kind)) {
+    const value = given[q.id];
+    let answer = '';
+    if (q.type === 'checkbox') {
+      const checked = value === true || value === 'on';
+      if (q.required && !checked) return { answers: [], error: `Bitte bestätige: ${q.label}` };
+      answer = checked ? 'Ja' : 'Nein';
+    } else {
+      answer = typeof value === 'string' ? value.replace(/\r\n?/g, '\n').trim() : '';
+      if (q.type !== 'textarea') answer = answer.replace(/\s+/g, ' ');
+      const max = q.type === 'textarea' ? QUESTION_LIMITS.longAnswer : QUESTION_LIMITS.answer;
+      if (answer.length > max)
+        return { answers: [], error: `Die Antwort auf „${q.label}“ ist zu lang.` };
+      if (CONTROL_CHARS.test(answer.replace(/\n/g, '')) || BIDI_CONTROLS.test(answer))
+        return { answers: [], error: `Die Antwort auf „${q.label}“ enthält unzulässige Zeichen.` };
+      if (q.type === 'select' && answer && !q.options.includes(answer))
+        return { answers: [], error: `Bitte wähle eine Antwort für „${q.label}“.` };
+      if (q.required && !answer) return { answers: [], error: `Bitte beantworte: ${q.label}` };
+    }
+    answers.push({ id: q.id, question: q.label, answer });
+  }
+  return { answers };
 }
 
 /** Applies saved values on top of the defaults; invalid or unknown saved values are ignored. */
@@ -155,6 +251,8 @@ export function mergeStored(defaults: Settings, stored: unknown): Settings {
     if (!error) merged[key] = value;
   }
   if (typeof data.portalOpen === 'boolean') merged.portalOpen = data.portalOpen;
+  const { questions, error } = checkQuestions(data.questions);
+  if (!error) merged.questions = questions;
   return merged;
 }
 
@@ -181,7 +279,9 @@ export async function validateSettings(input: unknown) {
     if (unsupported.length)
       errors[key] = `Diese Zeichen kann das PDF nicht darstellen: ${unsupported.join(' ')}`;
   }
-  return { settings: { ...texts, portalOpen } as Settings, errors };
+  const { questions, error: questionError } = checkQuestions(data.questions);
+  if (questionError) errors.questions = questionError;
+  return { settings: { ...texts, portalOpen, questions } as Settings, errors };
 }
 
 /** Reads the saved settings; throws if the database cannot be read. */
@@ -257,9 +357,17 @@ export function acceptingSubmissions(loaded: LoadedSettings) {
   );
 }
 
-export function consentVersion(settings: TextSettings, kind: 'new' | 'existing') {
+export function consentVersion(settings: Settings, kind: 'new' | 'existing') {
+  // Questions count as well: if they change, the visitor must see the new version first.
+  const questions = questionsFor(settings.questions, kind).map((q) => [
+    q.id,
+    q.label,
+    q.type,
+    q.required,
+    q.options,
+  ]);
   return createHash('sha256')
-    .update(JSON.stringify([kind, ...CONSENT_KEYS[kind].map((key) => settings[key])]))
+    .update(JSON.stringify([kind, ...CONSENT_KEYS[kind].map((key) => settings[key]), questions]))
     .digest('hex')
     .slice(0, 16);
 }
@@ -280,5 +388,6 @@ export function formConfig(loaded: LoadedSettings): FormConfig {
       new: consentVersion(loaded.settings, 'new'),
       existing: consentVersion(loaded.settings, 'existing'),
     },
+    questions: loaded.settings.questions,
   };
 }

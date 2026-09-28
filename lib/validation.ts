@@ -7,6 +7,12 @@ const name = z
   .max(80)
   .refine((v) => !/[\p{Cc}\p{Cf}]/u.test(v), 'Ungültige Zeichen im Namen.');
 
+/** Digits with optional +, spaces, brackets, slashes, dots or dashes; 6–20 digits. */
+export function validPhone(value: string) {
+  const digits = value.replace(/\D/g, '').length;
+  return /^\+?[0-9(][0-9 ()\/.-]*$/.test(value) && digits >= 6 && digits <= 20;
+}
+
 export function validDate(value: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(value + 'T00:00:00Z');
@@ -26,6 +32,18 @@ export const submissionSchema = z
     lastName: name,
     birthDate: z.string().refine(validDate),
     email: z.string().trim().max(254).toLowerCase().pipe(z.email()),
+    phone: z.string().trim().max(30).refine(validPhone),
+    room: z
+      .string()
+      .trim()
+      .min(1)
+      .max(20)
+      .refine((v) => !/[\p{Cc}\p{Cf}]/u.test(v)),
+    /** Answers to the additional questions, checked in lib/settings.ts#checkAnswers. */
+    answers: z
+      .record(z.string().max(40), z.union([z.string().max(2000), z.boolean()]))
+      .refine((v) => Object.keys(v).length <= 30)
+      .optional(),
     privacyRead: z.literal('on'),
     accuracyConfirmed: z.literal('on'),
     statutesAccepted: z.literal('on').optional(),
@@ -36,7 +54,7 @@ export const submissionSchema = z
   .refine((v) => v.kind === 'existing' || v.statutesAccepted === 'on');
 
 export const actionSchema = z.object({
-  action: z.enum(['approve', 'review', 'reject', 'sent', 'delete']),
+  action: z.enum(['approve', 'review', 'reject', 'sent', 'delete', 'mails', 'send_approval']),
   confirm: z.string().optional(),
 });
 
@@ -51,6 +69,11 @@ export type Submission = {
   /** YYYY-MM-DD */
   birth_date: string;
   email: string;
+  /** Empty for submissions made before these fields were introduced. */
+  phone: string | null;
+  room: string | null;
+  /** Answers to additional questions, with the question text at the time of submission. */
+  answers: { id: string; question: string; answer: string }[];
   status: Status;
   document_version: string;
   statutes_url: string;
@@ -60,6 +83,11 @@ export type Submission = {
   created_at: string;
   decided_at: string | null;
   sent_at: string | null;
+  /** Automatic e-mails (see lib/notify.ts). */
+  club_notified_at: string | null;
+  confirmation_sent_at: string | null;
+  mail_error: string | null;
+  approval_mail_error: string | null;
 };
 
 export function canTransition(kind: string, status: string, action: string) {

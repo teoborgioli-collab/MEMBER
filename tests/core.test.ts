@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, scryptSync } from 'node:crypto';
-import { submissionSchema, validDate, canTransition } from '../lib/validation';
+import { submissionSchema, validDate, validPhone, canTransition } from '../lib/validation';
 import { issueSession, verifySession, verifyPassword, allowedOrigin } from '../lib/security';
 import { connectionUrl, sslMode } from '../lib/db';
 
@@ -15,6 +15,8 @@ const valid = {
   lastName: 'Öztürk',
   birthDate: '2000-02-29',
   email: 'm@example.org',
+  phone: '+49 (0)30 123-4567',
+  room: '3.12',
   privacyRead: 'on',
   accuracyConfirmed: 'on',
   statutesAccepted: 'on',
@@ -31,6 +33,14 @@ test('requires acknowledgements and real past dates', () => {
     { birthDate: '2100-01-01' },
     { birthDate: '1899-12-31' },
     { email: 'invalid' },
+    { phone: undefined },
+    { phone: '' },
+    { phone: '12345' },
+    { phone: 'call me' },
+    { room: undefined },
+    { room: '  ' },
+    { room: 'x'.repeat(21) },
+    { room: 'A\u0000' },
     { firstName: '\n' },
     { firstName: 'A\u0000B' },
     { firstName: 'A‮B' },
@@ -50,12 +60,29 @@ test('requires acknowledgements and real past dates', () => {
   assert.equal(validDate('2000-02-30'), false);
 });
 
+test('phone numbers accept common notations', () => {
+  for (const ok of [
+    '030 1234567',
+    '+49 30 1234567',
+    '0176/12345678',
+    '(030) 12.34.56',
+    '+1-202-555-0100',
+  ])
+    assert.equal(validPhone(ok), true, ok);
+  for (const bad of ['', '12345', '++49 30 123456', '030 1234 abc', '1'.repeat(21), ' 0301234567'])
+    assert.equal(validPhone(bad), false, bad);
+});
+
 test('names and email addresses are normalised', () => {
   const parsed = submissionSchema.parse({
     ...valid,
     firstName: '  Jürgen ',
     email: '  Juergen.Mueller@Example.ORG ',
+    phone: ' 030 1234567 ',
+    room: ' B 214 ',
   });
+  assert.equal(parsed.phone, '030 1234567');
+  assert.equal(parsed.room, 'B 214');
   assert.equal(parsed.firstName, 'Jürgen');
   assert.equal(parsed.email, 'juergen.mueller@example.org');
 });

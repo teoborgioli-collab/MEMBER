@@ -1,14 +1,20 @@
+import { after } from 'next/server';
 import { submissionSchema } from '../../../lib/validation';
 import { body, failure, HttpError, json, limit } from '../../../lib/http';
 import {
   acceptingSubmissions,
   acknowledgements,
+  checkAnswers,
   consentVersion,
   formConfig,
   readSettings,
 } from '../../../lib/settings';
 import { db } from '../../../lib/db';
 import { UNAVAILABLE_NOTICE } from '../../../lib/form-settings';
+import { sendSubmissionEmails } from '../../../lib/notify';
+
+// Leaves time for the automatic e-mails, which are sent after the response.
+export const maxDuration = 30;
 
 export async function POST(request: Request) {
   try {
@@ -37,17 +43,24 @@ export async function POST(request: Request) {
         'Die Hinweise wurden gerade aktualisiert. Bitte lies sie erneut und bestätige sie.',
         { code: 'stale', config: formConfig(portal) },
       );
+    const { answers, error: answerError } = checkAnswers(s.questions, d.kind, d.answers);
+    if (answerError) throw new HttpError(400, answerError);
     await limit(request, 'submission', 10);
     const sql = db();
-    await sql`
+    const inserted = await sql`
       INSERT INTO submissions
-        (id, kind, first_name, last_name, birth_date, email,
+        (id, kind, first_name, last_name, birth_date, email, phone, room, answers,
          document_version, statutes_url, privacy_url, acknowledgements)
       VALUES
         (${d.requestId}, ${d.kind}, ${d.firstName}, ${d.lastName}, ${d.birthDate}, ${d.email},
+         ${d.phone}, ${d.room}, ${sql.json(answers)},
          ${s.documentVersion}, ${d.kind === 'new' ? s.statutesUrl : ''}, ${s.privacyUrl},
          ${sql.json(acknowledgements(s, d.kind))})
-      ON CONFLICT (id) DO NOTHING`;
+      ON CONFLICT (id) DO NOTHING
+      RETURNING id`;
+    // E-mails go out only after the submission is stored, and only for a new row (a retried
+    // request with the same id never triggers a second round).
+    if (inserted.length) after(() => sendSubmissionEmails(d.requestId, s));
     return json({ reference: d.requestId }, 201);
   } catch (err) {
     return failure(err, 'submission');

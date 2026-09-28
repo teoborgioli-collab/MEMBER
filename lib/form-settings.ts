@@ -217,6 +217,8 @@ export const FIELDS = define({
   labelLastName: { label: 'Feld „Nachname“', value: 'Nachname', max: 40 },
   labelBirthDate: { label: 'Feld „Geburtsdatum“', value: 'Geburtsdatum', max: 40 },
   labelEmail: { label: 'Feld „E-Mail-Adresse“', value: 'E-Mail-Adresse', max: 40 },
+  labelPhone: { label: 'Feld „Telefonnummer“', value: 'Telefonnummer', max: 40 },
+  labelRoom: { label: 'Feld „Zimmernummer“', value: 'Zimmernummer', max: 40 },
   emailPlaceholder: {
     label: 'Beispiel im E-Mail-Feld',
     value: 'du@beispiel.de',
@@ -450,7 +452,51 @@ export const FIELDS = define({
 
 export type TextKey = keyof typeof FIELDS;
 export type TextSettings = Record<TextKey, string>;
-export type Settings = TextSettings & { portalOpen: boolean };
+export type Settings = TextSettings & { portalOpen: boolean; questions: Question[] };
+
+// Additional questions the admin adds in /admin/formular. They appear in step 1 below the fixed
+// fields; answers are stored with each submission together with the question text.
+export type QuestionType = 'text' | 'textarea' | 'select' | 'checkbox';
+export type Audience = 'all' | 'new' | 'existing';
+export type Question = {
+  id: string;
+  label: string;
+  type: QuestionType;
+  required: boolean;
+  /** Choices for type "select". */
+  options: string[];
+  appliesTo: Audience;
+  help: string;
+};
+export const QUESTION_TYPES: [QuestionType, string][] = [
+  ['text', 'Kurzer Text'],
+  ['textarea', 'Längerer Text'],
+  ['select', 'Auswahlliste'],
+  ['checkbox', 'Häkchen (Ja/Nein)'],
+];
+export const AUDIENCES: [Audience, string][] = [
+  ['all', 'Alle'],
+  ['new', 'Nur neue Mitglieder'],
+  ['existing', 'Nur bestehende Mitglieder'],
+];
+export const QUESTION_LIMITS = {
+  count: 15,
+  label: 150,
+  help: 200,
+  options: 20,
+  option: 80,
+  answer: 300,
+  longAnswer: 1000,
+};
+
+export function questionsFor(questions: Question[], kind: 'new' | 'existing') {
+  return questions.filter((q) => q.appliesTo === 'all' || q.appliesTo === kind);
+}
+
+export function newQuestionId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(6));
+  return 'q_' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 export const TEXT_KEYS = Object.keys(FIELDS) as TextKey[];
 
@@ -500,7 +546,8 @@ export const GROUPS: Group[] = [
   {
     id: 'schritt1',
     title: 'Formular · Schritt 1',
-    description: 'Mitgliedsstatus und persönliche Angaben. Die Felder selbst bleiben unverändert.',
+    description:
+      'Mitgliedsstatus, persönliche Angaben und zusätzliche Fragen. Die sechs Pflichtfelder bleiben immer erhalten.',
     keys: [
       'formEyebrow',
       'form1Heading',
@@ -515,6 +562,8 @@ export const GROUPS: Group[] = [
       'labelBirthDate',
       'labelEmail',
       'emailPlaceholder',
+      'labelPhone',
+      'labelRoom',
       'fieldHint',
       'nextButton',
       'closedNotice',
@@ -612,6 +661,8 @@ export const FORM_TEXT_KEYS = [
   'labelBirthDate',
   'labelEmail',
   'emailPlaceholder',
+  'labelPhone',
+  'labelRoom',
   'fieldHint',
   'nextButton',
   'closedNotice',
@@ -659,6 +710,8 @@ export type FormConfig = {
   unavailable: boolean;
   /** Fingerprints of the acknowledgement texts and documents shown on each path. */
   consent: { new: string; existing: string };
+  /** Additional questions defined by the admin. */
+  questions: Question[];
 };
 
 export function formTexts(settings: TextSettings): FormTexts {

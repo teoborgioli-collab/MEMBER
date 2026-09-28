@@ -18,6 +18,14 @@ CREATE TABLE IF NOT EXISTS submissions (
 );
 -- The exact acknowledgement texts (checkbox wording) a person confirmed when submitting.
 ALTER TABLE submissions ADD COLUMN IF NOT EXISTS acknowledgements jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- Added 2026-09-29 (see scripts/migrations/): phone, room, additional answers, e-mail status.
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS phone text CHECK (phone IS NULL OR length(phone) <= 30);
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS room text CHECK (room IS NULL OR length(room) <= 20);
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS answers jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS club_notified_at timestamptz;
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS confirmation_sent_at timestamptz;
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS mail_error text;
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS approval_mail_error text;
 CREATE INDEX IF NOT EXISTS submissions_status_created ON submissions(status,created_at DESC);
 CREATE TABLE IF NOT EXISTS rate_limits (key text NOT NULL,bucket bigint NOT NULL,count integer NOT NULL,PRIMARY KEY(key,bucket));
 -- Texts, links and open/closed state edited in /admin/formular (a single row).

@@ -831,7 +831,8 @@ footer nav {
   align-content: start;
   min-width: 0;
 }
-.field:has(textarea) {
+.field:has(textarea),
+.field.wide {
   grid-column: 1 / -1;
 }
 .field label {
@@ -1068,4 +1069,113 @@ footer nav {
   .segmented button {
     padding: 8px 9px;
   }
+}
+
+/* Additional questions in the public form */
+.questions {
+  display: grid;
+  gap: 16px;
+  margin-top: 18px;
+}
+.question {
+  display: grid;
+  gap: 7px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.question input,
+.question select,
+.question textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #cdd7dc;
+  border-radius: 7px;
+  background: white;
+  padding: 11px 12px;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 400;
+}
+.question .optional,
+.question-help {
+  color: var(--muted);
+  font-weight: 400;
+}
+.question-help {
+  display: block;
+  font-size: 12px;
+}
+.questions .check {
+  margin: 0;
+}
+select {
+  font: inherit;
+}
+
+.mail-failed {
+  color: #8c2222;
+}
+
+/* Additional questions in the editor */
+.questions-editor {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.question-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 0;
+}
+.question-card legend {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--green);
+  padding: 0 6px;
+}
+.editor-fields.compact {
+  margin-top: 4px;
+  padding-top: 0;
+  border-top: 0;
+}
+.field select {
+  width: 100%;
+  border: 1px solid #cdd7dc;
+  border-radius: 7px;
+  background: white;
+  padding: 10px 12px;
+  color: var(--ink);
+  font-size: 15px;
+}
+.question-tools {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  font-size: 14px;
+}
+.question-buttons {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.inline-check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.danger-link {
+  color: #922323;
+}
+.link-button:disabled {
+  color: var(--muted);
+  text-decoration: none;
+}
+.subheading {
+  font-size: 16px;
+  margin: 26px 0 4px;
 }

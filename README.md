@@ -1,10 +1,12 @@
 # Mitgliederportal · Vercel
 
-A small German membership portal built with Next.js, TypeScript and Postgres. No paid email service, member accounts, analytics, or browser database SDK required.
+A small German membership portal built with Next.js, TypeScript and Postgres. No member accounts, analytics, or browser database SDK required. Automatic e-mails go through [Resend](https://resend.com).
 
 ## What is included
 
-- Responsive German form: first name, last name, date of birth, email.
+- Responsive German form: first name, last name, date of birth, email, phone number and room number (all required), plus **additional questions** the committee can add in the editor (short/long text, selection list, checkbox; for all or only new/existing members).
+- **Automatic e-mails via Resend** after each stored submission: a notification with all data to the club inbox (`info@ssvpotsdamerstr.de`) and a receipt to the person (it explicitly does **not** accept the application). Each is sent at most once; failures never lose the submission and can be retried from `/admin`.
+- **CSV export** of all submissions (Excel-compatible) from `/admin`.
 - New members acknowledge the statutes, privacy notice and accuracy of their information before applying.
 - Existing members submit current data for manual verification against the club’s existing register. This is an intake portal, not a replacement member database; it never reveals or automatically overwrites existing records.
 - Receipt page explicitly says an application has **not yet been accepted**.
@@ -81,21 +83,24 @@ This intentionally uses one shared administrative account, suitable for a small 
 
 ## 5. Environment variables
 
-| Variable              | Value / purpose                                                        |
-| --------------------- | ---------------------------------------------------------------------- |
-| `APP_URL`             | **Required.** Exact origin, no path: `https://members.yourdomain.com`  |
-| `DATABASE_URL`        | **Required.** Private pooled Postgres connection string                |
-| `DATABASE_SSL`        | `true` (verify certificate, default), `require` or `false` – section 2 |
-| `ADMIN_PASSWORD_HASH` | **Required.** Generated salted scrypt hash                             |
-| `SESSION_SECRET`      | **Required.** Random secret, at least 32 characters                    |
-| `CLUB_NAME`           | Optional starting value for the club name                              |
-| `CONTACT_EMAIL`       | Optional starting value for the administration mailbox                 |
-| `STATUTES_URL`        | Optional starting value: versioned public PDF path or HTTPS URL        |
-| `PRIVACY_URL`         | Optional starting value: versioned public PDF path or HTTPS URL        |
-| `IMPRINT_URL`         | Optional starting value: public imprint URL/path                       |
-| `DOCUMENT_VERSION`    | Optional starting value: document release recorded with submissions    |
-| `PORTAL_OPEN`         | Optional starting value: `true` opens the portal before the first save |
-| `DATABASE_POOL_MAX`   | Optional: database connections per server instance (default `3`)       |
+| Variable              | Value / purpose                                                           |
+| --------------------- | ------------------------------------------------------------------------- |
+| `APP_URL`             | **Required.** Exact origin, no path: `https://members.yourdomain.com`     |
+| `DATABASE_URL`        | **Required.** Private pooled Postgres connection string                   |
+| `DATABASE_SSL`        | `true` (verify certificate, default), `require` or `false` – section 2    |
+| `ADMIN_PASSWORD_HASH` | **Required.** Generated salted scrypt hash                                |
+| `SESSION_SECRET`      | **Required.** Random secret, at least 32 characters                       |
+| `CLUB_NAME`           | Optional starting value for the club name                                 |
+| `CONTACT_EMAIL`       | Optional starting value for the administration mailbox                    |
+| `STATUTES_URL`        | Optional starting value: versioned public PDF path or HTTPS URL           |
+| `PRIVACY_URL`         | Optional starting value: versioned public PDF path or HTTPS URL           |
+| `IMPRINT_URL`         | Optional starting value: public imprint URL/path                          |
+| `DOCUMENT_VERSION`    | Optional starting value: document release recorded with submissions       |
+| `PORTAL_OPEN`         | Optional starting value: `true` opens the portal before the first save    |
+| `DATABASE_POOL_MAX`   | Optional: database connections per server instance (default `3`)          |
+| `RESEND_API_KEY`      | **Required for e-mails.** Resend API key (secret) – section 10            |
+| `MAIL_FROM`           | Optional sender, default `SSV Potsdamer Straße <info@ssvpotsdamerstr.de>` |
+| `CLUB_NOTIFY_EMAIL`   | Optional club inbox, default `info@ssvpotsdamerstr.de`                    |
 
 All are server-side settings. The optional values are only used until the texts are saved in `/admin/formular`; invalid values (e.g. an `http://` link) are ignored with a warning in the server log. Do not use production database credentials in preview deployments. Preview builds should use a separate test database and secrets. `APP_URL` must match the origin used for forms/admin; requests from other origins are rejected by design.
 
@@ -131,7 +136,9 @@ References: [Vercel custom domains](https://vercel.com/docs/domains/working-with
 
 ## 8. Editing the form (`/admin/formular`)
 
-Sign in and choose **Formular bearbeiten**. The texts are grouped: _Verein & Kontakt_, _Dokumente & Links_, _Startseite_, _Formular · Schritt 1_, _Formular · Schritt 2_, _Eingangsbestätigung_, _E-Mail-Entwurf nach Annahme_ and _PDF-Mitgliedsbestätigung_. The form fields themselves (first name, last name, date of birth, email) stay fixed; their labels can be changed, e.g. to switch the portal from “du” to “Sie”.
+Sign in and choose **Formular bearbeiten**. The texts are grouped: _Verein & Kontakt_, _Dokumente & Links_, _Startseite_, _Formular · Schritt 1_, _Formular · Schritt 2_, _Eingangsbestätigung_, _E-Mail-Entwurf nach Annahme_ and _PDF-Mitgliedsbestätigung_. The six fixed fields (first name, last name, date of birth, email, phone, room number) are always required; their labels can be changed, e.g. to switch the portal from “du” to “Sie”.
+
+- **Zusätzliche Fragen** (in _Formular · Schritt 1_): add, edit, reorder and remove questions – short text, longer text, selection list (one option per line) or checkbox, optionally required, for everyone or only new/existing members, with an optional hint. Each answer is stored together with the question text as it was asked, so renaming or removing a question later keeps old answers readable. Answers appear in the club e-mail, in `/admin` and in the CSV export (not in the receipt or the PDF).
 
 - **Vorschau** shows the whole public page with the unsaved changes – both paths (new application, existing member), both steps and the receipt page. **Speichern** publishes immediately; **Verwerfen** returns to the saved version. Every field has **Standard wiederherstellen** for the original text.
 - **Portal-Status** opens or closes the portal. Opening requires club name, contact email, statutes, privacy notice, imprint and a document version; missing items are listed and linked. While closed, visitors see the form with the “closed” notice and cannot submit.
@@ -143,16 +150,33 @@ Sign in and choose **Formular bearbeiten**. The texts are grouped: _Verein & Kon
 ## 9. Day-to-day operation
 
 1. Sign in at `/admin`.
-2. Expand a submission and check the details. Emails and claimed existing membership are **not automatically verified**. Match updates using existing club records and contact the person through a known channel when needed.
+2. The club inbox receives a notification for every new submission. Expand it in `/admin` and check the details and the status of the automatic e-mails. Emails and claimed existing membership are **not automatically verified**. Match updates using existing club records and contact the person through a known channel when needed.
 3. For applicants, follow the actual admission process in the club’s statutes. Resolve any required guardian approval separately for minors; the online acknowledgement alone is not proof of guardian consent.
 4. Approve only after that decision. Existing-member submissions instead use **Als abgeglichen markieren**, after manually updating the authoritative membership register.
-5. Approved application (tab **Angenommen**): download PDF → open email draft → **attach the downloaded PDF yourself** → send from the club mailbox → mark sent. No API email provider is involved. If no mail app is configured, compose the email directly in webmail and attach the PDF.
+5. Approved application (tab **Angenommen**): download PDF → open email draft → **attach the downloaded PDF yourself** → send from the club mailbox → mark sent. This step is manual on purpose; the automatic Resend e-mails are only notifications and receipts. If no mail app is configured, compose the email directly in webmail and attach the PDF.
 6. Rejected applicants are not automatically emailed; inform them personally where appropriate.
 7. Delete intake records once transferred and no longer required, following your club’s documented retention policy. Decide retention periods for pending, rejected, accepted and update records with the responsible club administrator; do not leave the portal as an indefinite duplicate membership archive. Deletion affects the live database; provider backups and downloaded/email copies need their own retention policy.
 
 The PDF intentionally omits birth date and email. It records the name, club, decision date and application reference. It is a confirmation document, not a cryptographic signature or an independently authenticated membership credential. The bundled OFL Noto Sans font handles German and many European names. Unsupported scripts fail with a clear error instead of silently corrupting the name; extend the font support or issue that confirmation manually if needed.
 
-## 10. Checks and maintenance
+## 10. Automatic e-mails (Resend)
+
+After a submission has been stored, two e-mails are sent in the background (the visitor does not wait for them):
+
+1. **To the club** (`CLUB_NOTIFY_EMAIL`, default `info@ssvpotsdamerstr.de`), subject „Neue Mitgliedererfassung – Vorname Nachname“: kind (new application / existing member), first and last name, date of birth, e-mail, phone, room number, date and time (Berlin), reference number, additional answers and a link to `/admin`. Reply-To is the person’s address.
+2. **To the person**: a receipt for the application or the data update, with their details. It states that it is only a confirmation of receipt and not an acceptance of membership. Reply-To is the club inbox.
+
+Setup: verify the domain `ssvpotsdamerstr.de` in Resend (DNS records), create an API key with “Sending access”, and add it in Vercel as `RESEND_API_KEY` (Production), then redeploy. The key is only used on the server and must never be committed.
+
+Reliability: e-mails are only sent after the database insert succeeded and only for a new record – a repeated request (double click, lost response) never sends again. The time each e-mail went out is stored; Resend additionally receives an idempotency key per e-mail. If sending fails (missing key, Resend unreachable, rejected sender), the submission stays saved, the reason is shown in `/admin` („Automatische E-Mails“), and **E-Mails erneut senden** sends only the missing one. Logs contain only the reference and an error code. At most 60 club notifications and 60 receipts are sent per hour.
+
+The existing manual process after approval (PDF download, e-mail draft, „Als versendet markieren“) is unchanged.
+
+## 11. Database migrations
+
+`npm run db:migrate` applies `scripts/schema.sql` and can run repeatedly. For an existing database, the individual changes are also available as SQL files in `scripts/migrations/` that can be pasted into the Neon SQL editor. They only add columns and never delete or change data. Run them **before** deploying the code that needs them (the old code keeps working with the new columns).
+
+## 12. Checks and maintenance
 
 ```sh
 npm test                  # unit tests (validation, security, settings, PDF) – a few seconds
@@ -162,7 +186,7 @@ npm run typecheck
 
 `npm test` covers input validation, date handling, acknowledgement requirements, session integrity, origin checks, allowed status transitions, database URL/TLS options, text-setting validation and the PDF (approval gating, fonts, page breaks, file names).
 
-`npm run test:integration` builds the app and starts the **production server** against a throwaway database, then tests over HTTP: closed/open portal, submissions (both paths, retries, honeypot, invalid input, outdated acknowledgements), login and cookie flags, forged sessions, origin/size/format checks, the form editor (validation, going live, concurrent edits), all review transitions, PDF download and font errors, deletion, pagination, rate limits, logout, migration of an older database, missing or unreachable databases, and that server logs contain no personal data. A second part drives Chrome through the public form on a phone, an existing-member update, the re-confirmation flow, the editor with preview, expired sessions, concurrent editors, closing the portal, and the full approval workflow; screenshots and a sample PDF are saved in `test-results/`.
+`npm run test:integration` builds the app and starts the **production server** against a throwaway database, then tests over HTTP: closed/open portal, submissions (both paths, retries, honeypot, invalid input, required phone/room, outdated acknowledgements), both automatic e-mails against a stand-in Resend server (content, recipients, no duplicates, slow and failing service, retry from the admin area, missing API key, custom sender), additional questions (editor validation, required answers, audiences, stored wording), CSV export (including records from before the migration and formula neutralisation), the SQL migration file, login and cookie flags, forged sessions, origin/size/format checks, the form editor (validation, going live, concurrent edits), all review transitions, PDF download and font errors, deletion, pagination, rate limits, logout, migration of an older database, missing or unreachable databases, and that server logs contain no personal data. A second part drives Chrome through the public form on a phone, an existing-member update, the re-confirmation flow, the editor with preview and the question editor, answering additional questions, expired sessions, concurrent editors, closing the portal, and the full approval workflow with e-mail status and CSV export; screenshots and a sample PDF are saved in `test-results/`.
 
 - The database is an in-memory [PGlite](https://pglite.dev) by default (no installation needed). To test against a real Postgres, set `TEST_DATABASE_URL` to a database whose name contains `test` (each run uses and drops a temporary schema) and `TEST_DATABASE_SSL` (`true`, `require` or `false`).
 - The browser tests use the installed Google Chrome; set `CHROMIUM_PATH` to use another Chromium, or they are skipped with a notice.
@@ -177,7 +201,8 @@ Keep dependencies updated and review Vercel/database access regularly. For susta
 - `components/`: German membership form, page chrome, admin screens (`components/admin/`: submissions, form editor, preview).
 - `lib/form-settings.ts`: every editable text with its default, label, limits and editor group.
 - `lib/settings.ts`: validation, loading and saving of the texts; `lib/`: also input validation, database client, security and PDF generation.
-- `scripts/schema.sql`, `scripts/migrate.mts`: repeatable database schema and migration.
+- `lib/mail.ts`, `lib/notify.ts`: Resend client and the two automatic e-mails.
+- `scripts/schema.sql`, `scripts/migrate.mts`: repeatable database schema and migration; `scripts/migrations/`: SQL files for existing databases.
 - `public/documents/`: your **public** versioned club documents.
 - `tests/`: unit tests; `tests/integration/`: full-stack and browser tests.
 
