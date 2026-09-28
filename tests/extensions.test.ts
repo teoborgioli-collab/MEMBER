@@ -116,6 +116,8 @@ const row = {
   email: 'juergen@example.org',
   phone: '+49 30 1234567',
   room: 'B 214',
+  locale: 'de' as const,
+  membership_start_month: null,
   answers: [
     { question: 'Sportart', answer: 'Tennis' },
     { question: 'Leer', answer: '' },
@@ -144,7 +146,7 @@ test('the club notification lists all submitted data', () => {
     assert.ok(mail.text.includes(part), part);
   assert.doesNotMatch(mail.text, /Leer:/);
   const update = clubMessage(
-    { ...row, kind: 'existing', phone: null, room: null, answers: [] },
+    { ...row, kind: 'existing', phone: null, room: null, locale: 'de' as const, membership_start_month: '2024-09', answers: [] },
     'x',
   );
   assert.match(update.text, /Bestehendes Mitglied \(Datenaktualisierung\)/);
@@ -159,7 +161,7 @@ test('the receipt confirms receipt only – never admission', () => {
   assert.match(application.text, /Mitgliedsantrag.*erhalten/);
   assert.match(application.text, /nur eine Eingangsbestätigung/);
   assert.match(application.text, /noch nicht angenommen/);
-  const update = receiptMessage({ ...row, kind: 'existing' }, 'SSV Potsdamer Straße');
+  const update = receiptMessage({ ...row, kind: 'existing', locale: 'de' as const, membership_start_month: '2024-09' }, 'SSV Potsdamer Straße');
   assert.match(update.subject, /deine Mitgliedsdaten/);
   assert.match(update.text, /aktualisierten Mitgliedsdaten.*erhalten/);
   for (const mail of [application, update]) {
