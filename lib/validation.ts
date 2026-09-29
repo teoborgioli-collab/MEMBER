@@ -57,8 +57,19 @@ export const submissionSchema = z
   .refine((v) => v.kind !== 'existing' || Boolean(v.membershipStartMonth), { message: 'Eintrittsmonat erforderlich.' });
 
 export const actionSchema = z.object({
-  action: z.enum(['approve', 'review', 'reject', 'sent', 'delete', 'mails', 'send_approval']),
+  action: z.enum([
+    'approve',
+    'review',
+    'reject',
+    'sent',
+    'delete',
+    'mails',
+    'send_approval',
+    'send_certificate',
+  ]),
   confirm: z.string().optional(),
+  /** Client-generated per click; makes a repeated request send the certificate only once. */
+  requestId: z.uuid().optional(),
 });
 
 export const STATUSES = ['pending', 'approved', 'reviewed', 'rejected'] as const;
@@ -94,6 +105,9 @@ export type Submission = {
   confirmation_sent_at: string | null;
   mail_error: string | null;
   approval_mail_error: string | null;
+  /** Last membership certificate sent by e-mail (see lib/certificate-mail.ts). */
+  certificate_sent_at: string | null;
+  certificate_mail_error: string | null;
 };
 
 export function canTransition(kind: string, status: string, action: string) {

@@ -69,6 +69,8 @@ export async function sendMail(mail: Mail) {
 
 /** Explains a stored error code to the admin. */
 export function mailErrorMessage(code: string) {
+  if (code.includes('PDF_GLYPH'))
+    return 'Das PDF kann einige Zeichen im Namen nicht darstellen – bitte manuell erstellen.';
   if (code.includes('NO_API_KEY')) return 'RESEND_API_KEY ist in Vercel nicht gesetzt.';
   if (/HTTP_40[13]/.test(code))
     return 'Resend hat den Zugang abgelehnt (API-Schlüssel oder Absender-Domain prüfen).';

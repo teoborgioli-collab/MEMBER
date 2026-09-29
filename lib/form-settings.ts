@@ -449,6 +449,29 @@ export const FIELDS = define({
     max: 120,
     pdf: true,
   },
+
+  // Mitgliedsbescheinigung (zweisprachig)
+  certSubtitle: {
+    label: 'Briefkopf – Zusatz unter dem Vereinsnamen',
+    value: 'Studentische Selbstverwaltung Potsdamer Straße',
+    max: 120,
+    optional: true,
+    pdf: true,
+  },
+  certAddress: {
+    label: 'Briefkopf – Anschrift und Kontakt',
+    value: 'Potsdamer Str. 63 · 10785 Berlin · info@ssvpotsdamerstr.de',
+    max: 160,
+    optional: true,
+    pdf: true,
+  },
+  certPlace: {
+    label: 'Ausstellungsort',
+    value: 'Berlin',
+    max: 60,
+    pdf: true,
+    help: 'Steht vor dem Datum, z. B. „Berlin, 29. September 2026“.',
+  },
 });
 
 export type TextKey = keyof typeof FIELDS;
@@ -629,6 +652,13 @@ export const GROUPS: Group[] = [
     description:
       'Texte im PDF. Name, Aufnahmedatum und Vorgangsnummer werden automatisch eingefügt.',
     keys: ['pdfTitle', 'pdfIntro', 'pdfWelcome', 'pdfWelcomeText', 'pdfSignature'],
+  },
+  {
+    id: 'bescheinigung',
+    title: 'Mitgliedsbescheinigung',
+    description:
+      'Zweisprachige Bescheinigung (Deutsch/Englisch), die du in der Verwaltung per E-Mail senden oder zum Unterschreiben ausdrucken kannst. Name, Geburtsdatum, Mitglied seit, Datum und Prüfcode werden automatisch eingefügt.',
+    keys: ['certSubtitle', 'certAddress', 'certPlace'],
   },
 ];
 

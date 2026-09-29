@@ -37,6 +37,7 @@ const PDF_KEYS = [
   'pdfWelcomeText',
   'pdfSignature',
 ] as const;
+const CERT_KEYS = ['clubName', 'contactEmail', 'certSubtitle', 'certAddress', 'certPlace'] as const;
 const groupOf = (key: TextKey) => GROUPS.find((group) => group.keys.includes(key))?.id ?? '';
 
 export default function SettingsEditor({
@@ -226,6 +227,26 @@ export default function SettingsEditor({
     }
   }
 
+  async function sampleCertificate(variant: 'digital' | 'print') {
+    if (!draft) return;
+    setPdfBusy(true);
+    setMessage(null);
+    try {
+      await download('/api/admin/certificate-preview', 'Beispiel-Mitgliedsbescheinigung.pdf', {
+        method: 'POST',
+        json: { variant, ...Object.fromEntries(CERT_KEYS.map((key) => [key, draft[key]])) },
+      });
+    } catch (err) {
+      showErrors(err);
+      setMessage({
+        ok: false,
+        text: failureText(err, 'Die Beispiel-Bescheinigung konnte nicht erstellt werden.'),
+      });
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
   return (
     <div className="editor">
       <section className="editor-card status-card" aria-labelledby="status-title">
@@ -352,6 +373,27 @@ export default function SettingsEditor({
                   Mit dem Beispielnamen „Anna Beispiel“ und den Texten, wie sie gerade im Editor
                   stehen.
                 </small>
+              </div>
+            )}
+            {group.id === 'bescheinigung' && (
+              <div className="editor-extra">
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={() => sampleCertificate('digital')}
+                  disabled={pdfBusy}
+                >
+                  Beispiel digital
+                </button>
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={() => sampleCertificate('print')}
+                  disabled={pdfBusy}
+                >
+                  Beispiel Druckversion
+                </button>
+                <small className="muted">Mit der fiktiven „Anna Beispiel“.</small>
               </div>
             )}
           </details>

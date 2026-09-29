@@ -2,10 +2,16 @@ import fontkit from '@pdf-lib/fontkit';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-// Bundled OFL Noto Sans used for the confirmation PDF (see public/fonts/OFL.txt).
+// Bundled OFL Noto Sans used for the PDFs (see public/fonts/OFL.txt).
 let bytes: Promise<Buffer> | undefined;
 export function pdfFont() {
   return (bytes ||= readFile(path.join(process.cwd(), 'public/fonts/NotoSans-Regular.ttf')));
+}
+
+// Semi-bold cut for headings and highlighted values in the membership certificate.
+let boldBytes: Promise<Buffer> | undefined;
+export function pdfFontBold() {
+  return (boldBytes ||= readFile(path.join(process.cwd(), 'public/fonts/NotoSans-SemiBold.ttf')));
 }
 
 let codePoints: Promise<Set<number>> | undefined;

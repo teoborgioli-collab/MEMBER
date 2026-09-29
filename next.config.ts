@@ -1,12 +1,15 @@
 import type { NextConfig } from 'next';
 
 // Routes that read the bundled PDF font at runtime (PDF creation and glyph validation).
-const font = ['./public/fonts/NotoSans-Regular.ttf'];
+const font = ['./public/fonts/NotoSans-Regular.ttf', './public/fonts/NotoSans-SemiBold.ttf'];
 
 const config: NextConfig = {
   poweredByHeader: false,
   outputFileTracingIncludes: {
+    '/api/admin/submissions/*': font,
     '/api/admin/submissions/*/pdf': font,
+    '/api/admin/submissions/*/certificate': font,
+    '/api/admin/certificate-preview': font,
     '/api/admin/pdf-preview': font,
     '/api/admin/settings': font,
   },

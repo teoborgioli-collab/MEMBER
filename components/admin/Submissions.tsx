@@ -7,7 +7,19 @@ import { api, ApiError, dateTime, download } from './api';
 
 type Filter = Status | 'all';
 type Mail = { clubName: string; subject: string; body: string };
-type Action = 'approve' | 'review' | 'reject' | 'sent' | 'delete' | 'mails' | 'send_approval';
+type Action =
+  | 'approve'
+  | 'review'
+  | 'reject'
+  | 'sent'
+  | 'delete'
+  | 'mails'
+  | 'send_approval'
+  | 'send_certificate';
+
+const hasCertificate = (row: Submission) =>
+  (row.kind === 'new' && row.status === 'approved') ||
+  (row.kind === 'existing' && row.status === 'reviewed');
 
 const LABELS: Record<Status, string> = {
   pending: 'Offen',
@@ -29,6 +41,8 @@ const QUESTIONS: Record<Action, string> = {
   send_approval: 'Die Mitgliedsbestätigung mit PDF jetzt automatisch an das Mitglied senden?',
   reject: 'Diesen Antrag ablehnen? Die Person wird dadurch nicht automatisch benachrichtigt.',
   mails: 'Die noch nicht versendeten automatischen E-Mails jetzt erneut senden?',
+  send_certificate:
+    'Die Mitgliedsbescheinigung (Deutsch/Englisch, maschinell erstellt, mit heutigem Datum) jetzt per E-Mail an das Mitglied senden?',
 };
 
 const DONE: Record<Action, { text: string; filter?: Filter }> = {
@@ -42,6 +56,7 @@ const DONE: Record<Action, { text: string; filter?: Filter }> = {
   delete: { text: 'Eintrag gelöscht.' },
   mails: { text: 'Automatische E-Mails versendet.' },
   send_approval: { text: 'Mitgliedsbestätigung mit PDF versendet.' },
+  send_certificate: { text: 'Mitgliedsbescheinigung per E-Mail versendet.' },
 };
 
 const day = (value: string) =>
@@ -110,7 +125,11 @@ export default function Submissions({
     try {
       const result = await api<{ok: boolean; warning?: string}>('/api/admin/submissions/' + row.id, {
         method: 'POST',
-        json: { action, confirm: action === 'delete' ? row.id : undefined },
+        json: {
+          action,
+          confirm: action === 'delete' ? row.id : undefined,
+          requestId: action === 'send_certificate' ? crypto.randomUUID() : undefined,
+        },
       });
       await load();
       if (result.warning) setError(result.warning);
@@ -131,6 +150,22 @@ export default function Submissions({
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) onExpired();
       setError(err instanceof Error ? err.message : 'Das PDF konnte nicht erstellt werden.');
+    } finally {
+      setWorking('');
+    }
+  }
+
+  async function downloadCertificate(row: Submission, variant: 'digital' | 'print') {
+    setWorking(row.id + ':' + variant);
+    setError('');
+    try {
+      await download(
+        `/api/admin/submissions/${row.id}/certificate?variant=${variant}`,
+        'Mitgliedsbescheinigung.pdf',
+      );
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) onExpired();
+      setError(err instanceof Error ? err.message : 'Die Bescheinigung konnte nicht erstellt werden.');
     } finally {
       setWorking('');
     }
@@ -330,6 +365,49 @@ export default function Submissions({
               das PDF für eigene Unterlagen herunterladen.
             </div>
           )}
+          {hasCertificate(row) && (
+            <div className="certificate-box">
+              <strong>Mitgliedsbescheinigung</strong>
+              <small className="muted">
+                Zweisprachig (Deutsch/Englisch) mit Geburtsdatum, „Mitglied seit“ und heutigem
+                Datum. Die E-Mail-Version ist maschinell erstellt, ohne Unterschrift gültig und hat
+                einen Prüfcode. Die Druckversion hat Felder für Unterschrift und Name.
+              </small>
+              <small>
+                Zuletzt per E-Mail:{' '}
+                {row.certificate_sent_at ? dateTime(row.certificate_sent_at) : 'noch nie versendet'}
+                {row.certificate_mail_error && (
+                  <span className="mail-failed">
+                    {' '}
+                    · Fehler: {mailErrorMessage(row.certificate_mail_error)}
+                  </span>
+                )}
+              </small>
+              <div className="actions">
+                <button
+                  className="button"
+                  disabled={!!working}
+                  onClick={() => act(row, 'send_certificate')}
+                >
+                  {working === row.id ? 'Wird gesendet …' : 'Per E-Mail senden'}
+                </button>
+                <button
+                  className="button secondary"
+                  disabled={!!working}
+                  onClick={() => downloadCertificate(row, 'digital')}
+                >
+                  {working === row.id + ':digital' ? 'PDF wird erstellt …' : 'Digitale Version (PDF)'}
+                </button>
+                <button
+                  className="button secondary"
+                  disabled={!!working}
+                  onClick={() => downloadCertificate(row, 'print')}
+                >
+                  {working === row.id + ':print' ? 'PDF wird erstellt …' : 'Druckversion zum Unterschreiben'}
+                </button>
+              </div>
+            </div>
+          )}
           <div className="actions">
             {row.status === 'pending' && (
               <>
@@ -352,7 +430,7 @@ export default function Submissions({
             {row.status === 'approved' && (
               <>
                 <button className="button" disabled={!!working} onClick={() => downloadPdf(row)}>
-                  {working === row.id + ':pdf' ? 'PDF wird erstellt …' : 'PDF herunterladen'}
+                  {working === row.id + ':pdf' ? 'PDF wird erstellt …' : 'Aufnahmebestätigung (PDF)'}
                 </button>
                 {!row.sent_at && (
                   <button className="button secondary" disabled={!!working}
@@ -361,11 +439,6 @@ export default function Submissions({
                   </button>
                 )}
               </>
-            )}
-            {row.kind === 'existing' && row.status === 'reviewed' && row.membership_start_month && (
-              <button className="button" disabled={!!working} onClick={() => downloadPdf(row)}>
-                {working === row.id + ':pdf' ? 'PDF wird erstellt …' : 'Mitgliedsbescheinigung herunterladen'}
-              </button>
             )}
             {(!row.club_notified_at || !row.confirmation_sent_at) && (
               <button

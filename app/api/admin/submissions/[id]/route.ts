@@ -6,6 +6,7 @@ import { mailErrorMessage } from '../../../../../lib/mail';
 import { sendSubmissionEmails } from '../../../../../lib/notify';
 import { fetchSettings } from '../../../../../lib/settings';
 import { sendApprovalEmail } from '../../../../../lib/approval-mail';
+import { sendCertificateEmail } from '../../../../../lib/certificate-mail';
 
 export const maxDuration = 30;
 
@@ -21,6 +22,18 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       const error = await sendApprovalEmail(id);
       if (error === 'NOT_APPROVED') throw new HttpError(409, 'Zunächst muss der Antrag angenommen werden.');
       if (error) throw new HttpError(502, 'Mitgliedschaft angenommen, aber der PDF-Versand ist fehlgeschlagen: ' + mailErrorMessage(error));
+      return json({ ok: true });
+    }
+    if (input.data.action === 'send_certificate') {
+      if (!input.data.requestId) throw new HttpError(400, 'Ungültige Aktion.');
+      const error = await sendCertificateEmail(id, input.data.requestId);
+      if (error === 'NOT_FOUND') throw new HttpError(404, 'Eintrag nicht gefunden.');
+      if (error === 'NOT_MEMBER')
+        throw new HttpError(409, 'Eine Mitgliedsbescheinigung gibt es erst nach Annahme bzw. Abgleich.');
+      if (error === 'PDF_GLYPH')
+        throw new HttpError(422, 'Das PDF kann einige Zeichen im Namen nicht darstellen. Bitte die Bescheinigung manuell erstellen.');
+      if (error)
+        throw new HttpError(502, 'Die Mitgliedsbescheinigung wurde nicht versendet: ' + mailErrorMessage(error));
       return json({ ok: true });
     }
     if (input.data.action === 'mails') {
