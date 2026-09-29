@@ -55,7 +55,10 @@ test('invalid stored questions fall back to the defaults instead of breaking the
   const defaults = defaultSettings({});
   assert.deepEqual(mergeStored(defaults, { questions: [{ id: 'bad' }] }).questions, []);
   const good = [q()];
-  assert.deepEqual(mergeStored(defaults, { questions: good }).questions, good);
+  // Stored questions gain empty English fields (bilingual portal).
+  assert.deepEqual(mergeStored(defaults, { questions: good }).questions, [
+    { ...good[0], labelEn: '', helpEn: '', optionsEn: [] },
+  ]);
 });
 
 test('answers are checked against the questions of the chosen path', () => {

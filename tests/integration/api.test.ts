@@ -414,7 +414,8 @@ describe('submissions', () => {
     assert.equal(pdf.getPageCount(), 1);
     assert.equal(pdf.getTitle(), 'Aufnahmebestätigung');
     assert.equal(pdf.getAuthor(), COMPLETE.clubName);
-    assert.equal((await admin.json(`/api/admin/submissions/${ids.existing}/pdf`)).status, 409);
+    // Reviewed existing members with a start month get a confirmation too.
+    assert.equal((await admin.req(`/api/admin/submissions/${ids.existing}/pdf`)).status, 200);
   });
 
   test('marking as sent is recorded once', async () => {
@@ -692,6 +693,71 @@ describe('automatic e-mails', () => {
 
   after(async () => {
     await db.sql`DELETE FROM submissions WHERE last_name = 'Mailtest'`;
+  });
+});
+
+describe('membership certificate', () => {
+  let id = '';
+  const send = (requestId: string = crypto.randomUUID()) =>
+    admin.json('/api/admin/submissions/' + id, { json: { action: 'send_certificate', requestId } });
+
+  before(async () => {
+    await db.sql`DELETE FROM rate_limits`;
+    const application = newApplication(await pageConsent(app.base), { lastName: 'Zertifikat' });
+    assert.equal((await new Client(app.base).json('/api/submissions', { json: application })).status, 201);
+    id = application.requestId;
+  });
+
+  test('is only available for accepted members', async () => {
+    assert.equal((await admin.json(`/api/admin/submissions/${id}/certificate`)).status, 409);
+    assert.equal((await send()).status, 409);
+    assert.equal((await new Client(app.base).json(`/api/admin/submissions/${id}/certificate`)).status, 401);
+    await admin.json('/api/admin/submissions/' + id, { json: { action: 'approve' } });
+  });
+
+  test('digital and print PDFs can be downloaded', async () => {
+    for (const variant of ['digital', 'print']) {
+      const res = await admin.req(`/api/admin/submissions/${id}/certificate?variant=${variant}`);
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get('content-type'), 'application/pdf');
+      assert.equal(
+        res.headers.get('content-disposition'),
+        `attachment; filename="Mitgliedsbescheinigung-Juergen-Zertifikat${variant === 'print' ? '-Druck' : ''}.pdf"`,
+      );
+      const pdf = await PDFDocument.load(new Uint8Array(await res.arrayBuffer()));
+      assert.equal(pdf.getTitle(), 'Mitgliedsbescheinigung / Certificate of Membership');
+    }
+  });
+
+  test('is sent by e-mail with the PDF, once per click, and can be sent again', async () => {
+    mail.mails.length = 0;
+    const requestId = crypto.randomUUID();
+    assert.equal((await send(requestId)).status, 200);
+    assert.equal((await send(requestId)).status, 200);
+    const [first] = (await mail.waitFor(1)) as any[];
+    const body = first;
+    assert.match(body.subject, /^Deine Mitgliedsbescheinigung \/ Your membership certificate/);
+    assert.deepEqual(body.to, ['juergen.oeztuerk@example.org']);
+    assert.equal(body.attachments[0].filename, 'Mitgliedsbescheinigung-Juergen-Zertifikat.pdf');
+    assert.equal(first.idempotencyKey, `${id}-bescheinigung-${requestId}`);
+    assert.equal(mail.mails.length, 1);
+    const { data } = await admin.json('/api/admin/submissions?status=approved');
+    assert.ok(data.rows.find((r: any) => r.id === id).certificate_sent_at);
+    assert.equal((await send()).status, 200);
+  });
+
+  test('the verification page confirms the code and rejects others', async () => {
+    const { certificateCode, berlinDay } = await import('../../lib/certificate');
+    process.env.SESSION_SECRET = app.env.SESSION_SECRET;
+    const code = certificateCode(id, berlinDay());
+    const ok = await html('/pruefen?code=' + code);
+    assert.equal(ok.status, 200);
+    assert.match(ok.text, /Gültige Bescheinigung/);
+    assert.match(ok.text, /Jürgen Zertifikat/);
+    const bad = await html('/pruefen?code=' + code.slice(0, -1) + (code.endsWith('A') ? 'B' : 'A'));
+    assert.match(bad.text, /nicht gültig/);
+    await admin.json('/api/admin/submissions/' + id, { json: { action: 'delete', confirm: id } });
+    assert.match((await html('/pruefen?code=' + code)).text, /nicht gültig/);
   });
 });
 

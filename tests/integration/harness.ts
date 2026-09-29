@@ -328,6 +328,7 @@ export function newApplication(consent: Consent | string, overrides: Record<stri
     accuracyConfirmed: 'on',
     website: '',
     consent: typeof consent === 'string' ? consent : consent[kind],
+    ...(kind === 'existing' ? { membershipStartMonth: '2024-10' } : {}),
     ...overrides,
   };
 }

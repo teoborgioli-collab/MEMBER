@@ -89,7 +89,12 @@ test('names and email addresses are normalised', () => {
 
 test('existing updates do not require statute acceptance', () => {
   assert.equal(
-    submissionSchema.safeParse({ ...valid, kind: 'existing', statutesAccepted: undefined }).success,
+    submissionSchema.safeParse({
+      ...valid,
+      kind: 'existing',
+      statutesAccepted: undefined,
+      membershipStartMonth: '2024-10',
+    }).success,
     true,
   );
 });
